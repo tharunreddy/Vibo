@@ -1,0 +1,42 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      objc2:
+        patterns:
+          - "objc2"
+          - "objc2-*"
+          - "block2"
+          - "dispatch2"
+      tracing:
+        patterns:
+          - "tracing"
+          - "tracing-*"
+      cargo-patch:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "objc2"
+          - "objc2-*"
+          - "block2"
+          - "dispatch2"
+          - "tracing"
+          - "tracing-*"
+        update-types:
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
