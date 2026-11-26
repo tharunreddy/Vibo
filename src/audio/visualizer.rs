@@ -88,8 +88,8 @@ impl AudioVisualiser {
                 continue;
             }
             let mut power_sum = 0.0_f32;
-            for bin_idx in start_bin..end_bin {
-                let mag = self.fft_input[bin_idx].norm();
+            for bin in &self.fft_input[start_bin..end_bin] {
+                let mag = bin.norm();
                 power_sum += mag * mag;
             }
             let avg_power = power_sum / (end_bin - start_bin) as f32;
