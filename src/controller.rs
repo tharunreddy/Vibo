@@ -681,6 +681,26 @@ impl AppController {
                 self.warm_asr();
                 self.refresh_tray();
             }
+            tray::TrayAction::OpenCustomVocabularyDialog => {
+                let current = self.settings_snapshot().custom_vocabulary;
+                let ctrl = Arc::clone(self);
+                tray::prompt_custom_vocabulary_on_main(current, move |words| {
+                    let normalized = settings::normalize_custom_vocabulary(
+                        &words,
+                        crate::asr::gemini_live::GEMINI_MAX_CUSTOM_VOCABULARY,
+                    );
+                    let count = normalized.len();
+                    let s = ctrl.update_settings(|s| s.custom_vocabulary = normalized);
+                    ctrl.warm_asr();
+                    ctrl.refresh_tray();
+                    let notice = match count {
+                        0 => "Cleared custom vocabulary".to_string(),
+                        1 => "Saved 1 custom word".to_string(),
+                        n => format!("Saved {n} custom words"),
+                    };
+                    overlay::show_notice(notice, overlay::NoticeKind::Warning, s.overlay_position);
+                });
+            }
             tray::TrayAction::SelectMicrophone(mic) => {
                 self.update_settings(|s| s.microphone = mic);
                 self.refresh_tray();

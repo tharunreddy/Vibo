@@ -54,6 +54,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSControl",
     "NSEvent",
     "NSFont",
+    "NSGradient",
     "NSGraphics",
     "NSGraphicsContext",
     "NSImage",
@@ -66,11 +67,15 @@ objc2-app-kit = { version = "0.3", features = [
     "NSResponder",
     "NSRunningApplication",
     "NSScreen",
+    "NSScrollView",
     "NSSecureTextField",
     "NSSound",
     "NSStatusBar",
     "NSStatusItem",
+    "NSText",
+    "NSTextContainer",
     "NSTextField",
+    "NSTextView",
     "NSView",
     "NSVisualEffectView",
     "NSWindow",
@@ -97,7 +102,7 @@ dispatch2 = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "tracing-log"] }
 tracing-appender = "0.2"
-jiff = { version = "1", default-features = false, features = ["std"] }
+jiff = { version = "1", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 
 # Utilities
 anyhow = "1"

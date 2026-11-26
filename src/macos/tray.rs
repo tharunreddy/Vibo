@@ -1,22 +1,26 @@
 //! Native macOS `NSStatusItem` menu bar + native `NSAlert` dialogs for API key,
-//! interactive shortcut capture, and permissions.
+//! custom vocabulary, interactive shortcut capture, and permissions.
 
+use crate::asr::gemini_live::GEMINI_MAX_CUSTOM_VOCABULARY;
 use crate::audio::capture;
 use crate::hotkeys;
 use crate::macos::permissions;
 use crate::settings::{self, OverlayPosition, Settings, ShortcutActivation, SoundTheme};
 use crate::telemetry;
+use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::runtime::{AnyObject, Bool, ProtocolObject};
+use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSControlStateValueOff,
-    NSControlStateValueOn, NSFont, NSImage, NSMenu, NSMenuItem, NSSecureTextField, NSStatusBar,
-    NSStatusItem, NSTextAlignment, NSTextField, NSVariableStatusItemLength,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSAutoresizingMaskOptions, NSBezierPath,
+    NSBorderType, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSEventModifierFlags,
+    NSFont, NSGradient, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSScrollView,
+    NSSecureTextField, NSStatusBar, NSStatusItem, NSTextAlignment, NSTextField, NSTextView,
+    NSVariableStatusItemLength,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-use std::cell::RefCell;
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+use std::cell::{Cell, RefCell};
 use std::sync::{Arc, mpsc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +35,7 @@ pub enum TrayAction {
     Cancel,
     CopyLastTranscript,
     ToggleSmartMode,
+    OpenCustomVocabularyDialog,
     SelectMicrophone(Option<String>),
     SetShortcut(String),
     RecordShortcutInteractive,
@@ -80,6 +85,8 @@ const TAG_THEME_POP: isize = 17;
 const TAG_THEME_MARIMBA: isize = 18;
 const TAG_TOGGLE_LOGIN: isize = 19;
 const TAG_TOGGLE_TRAILING_SPACE: isize = 25;
+const TAG_CUSTOM_VOCAB: isize = 26;
+const TAG_WORD_STATS: isize = 27;
 const TAG_API_KEY: isize = 20;
 const TAG_PERMISSIONS: isize = 21;
 const TAG_OPEN_SETTINGS: isize = 22;
@@ -94,6 +101,18 @@ define_class!(
     #[ivars = MenuTargetIvars]
     struct LiviMenuTarget;
 
+    unsafe impl NSObjectProtocol for LiviMenuTarget {}
+
+    unsafe impl NSMenuDelegate for LiviMenuTarget {
+        #[unsafe(method(menuWillOpen:))]
+        fn menu_will_open(&self, menu: &NSMenu) {
+            if let Some(item) = menu.itemWithTag(TAG_WORD_STATS) {
+                let label = telemetry::word_stats().menu_label();
+                item.setTitle(&NSString::from_str(&label));
+            }
+        }
+    }
+
     impl LiviMenuTarget {
         #[unsafe(method(onMenuItem:))]
         fn on_menu_item(&self, sender: *mut AnyObject) {
@@ -106,6 +125,7 @@ define_class!(
                 TAG_CANCEL => Some(TrayAction::Cancel),
                 TAG_COPY_LAST => Some(TrayAction::CopyLastTranscript),
                 TAG_TOGGLE_SMART => Some(TrayAction::ToggleSmartMode),
+                TAG_CUSTOM_VOCAB => Some(TrayAction::OpenCustomVocabularyDialog),
                 TAG_MIC_DEFAULT => Some(TrayAction::SelectMicrophone(None)),
                 TAG_RECORD_SHORTCUT => Some(TrayAction::RecordShortcutInteractive),
                 TAG_PRESET_R_OPT_CMD => Some(TrayAction::SetShortcut("option_right+command_right".into())),
@@ -161,6 +181,7 @@ impl LiviMenuTarget {
 struct TrayInner {
     status_item: Retained<NSStatusItem>,
     target: Retained<LiviMenuTarget>,
+    last_icon: Cell<Option<(TrayIconState, bool)>>,
 }
 
 thread_local! {
@@ -214,26 +235,166 @@ fn make_header(mtm: MainThreadMarker, title: &str) -> Retained<NSMenuItem> {
     item
 }
 
-fn set_status_icon(status_item: &NSStatusItem, state: TrayIconState, warning: bool) {
-    let Some(button) = status_item.button(MainThreadMarker::new().unwrap()) else {
+const STATUS_ICON_WIDTH: f64 = 22.0;
+const STATUS_ICON_HEIGHT: f64 = 18.0;
+
+fn gemini_sparkle_path(cx: f64, cy: f64, r: f64, waist: f64) -> Retained<NSBezierPath> {
+    let path = NSBezierPath::bezierPath();
+    let k = r * waist;
+    path.moveToPoint(NSPoint::new(cx, cy - r));
+    path.curveToPoint_controlPoint1_controlPoint2(
+        NSPoint::new(cx + r, cy),
+        NSPoint::new(cx + k, cy - k),
+        NSPoint::new(cx + k, cy - k),
+    );
+    path.curveToPoint_controlPoint1_controlPoint2(
+        NSPoint::new(cx, cy + r),
+        NSPoint::new(cx + k, cy + k),
+        NSPoint::new(cx + k, cy + k),
+    );
+    path.curveToPoint_controlPoint1_controlPoint2(
+        NSPoint::new(cx - r, cy),
+        NSPoint::new(cx - k, cy + k),
+        NSPoint::new(cx - k, cy + k),
+    );
+    path.curveToPoint_controlPoint1_controlPoint2(
+        NSPoint::new(cx, cy - r),
+        NSPoint::new(cx - k, cy - k),
+        NSPoint::new(cx - k, cy - k),
+    );
+    path.closePath();
+    path
+}
+
+fn build_status_icon(state: TrayIconState, warning: bool) -> Retained<NSImage> {
+    let is_template = matches!((state, warning), (TrayIconState::Idle, false));
+    let handler = RcBlock::new(move |dst_rect: NSRect| -> Bool {
+        let ox = dst_rect.origin.x;
+        let oy = dst_rect.origin.y;
+
+        // 4 sculpted soundwave bars cradling the upper-right accent jewel.
+        let bar_w = 2.2;
+        let bars: [(f64, f64, f64); 4] = match state {
+            TrayIconState::Listening => [
+                (1.8, 9.5, 8.0),
+                (5.3, 9.2, 13.8),
+                (8.8, 9.6, 10.6),
+                (12.3, 12.1, 5.2),
+            ],
+            TrayIconState::Idle | TrayIconState::Polishing => [
+                (1.8, 9.6, 5.8),
+                (5.3, 9.2, 12.8),
+                (8.8, 9.8, 9.0),
+                (12.3, 12.3, 4.6),
+            ],
+        };
+
+        let bar_color = if is_template {
+            NSColor::blackColor()
+        } else {
+            NSColor::labelColor()
+        };
+        bar_color.setFill();
+        for (x, cy, h) in bars {
+            let rect = NSRect::new(
+                NSPoint::new(ox + x, oy + cy - h / 2.0),
+                NSSize::new(bar_w, h),
+            );
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, bar_w / 2.0, bar_w / 2.0)
+                .fill();
+        }
+
+        let jx = ox + 16.7;
+        let jy = oy + 5.5;
+
+        match (state, warning) {
+            (TrayIconState::Idle, false) => {
+                NSColor::blackColor().setFill();
+                gemini_sparkle_path(jx, jy, 4.3, 0.16).fill();
+            }
+            (TrayIconState::Listening, _) => {
+                // Coral-red live recording indicator with subtle glow halo.
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.98, 0.31, 0.34, 0.30).setFill();
+                let halo_r = 3.9;
+                NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+                    NSPoint::new(jx - halo_r, jy - halo_r),
+                    NSSize::new(halo_r * 2.0, halo_r * 2.0),
+                ))
+                .fill();
+
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.98, 0.30, 0.33, 1.0).setFill();
+                let dot_r = 2.6;
+                NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+                    NSPoint::new(jx - dot_r, jy - dot_r),
+                    NSSize::new(dot_r * 2.0, dot_r * 2.0),
+                ))
+                .fill();
+            }
+            (TrayIconState::Polishing, _) => {
+                // Luminous cyan-to-violet Gemini sparkle matching LIVI branding.
+                let star = gemini_sparkle_path(jx, jy, 4.6, 0.16);
+                let start = NSColor::colorWithSRGBRed_green_blue_alpha(0.20, 0.78, 1.0, 1.0);
+                let end = NSColor::colorWithSRGBRed_green_blue_alpha(0.56, 0.34, 1.0, 1.0);
+                if let Some(grad) =
+                    NSGradient::initWithStartingColor_endingColor(NSGradient::alloc(), &start, &end)
+                {
+                    grad.drawInBezierPath_angle(&star, -45.0);
+                } else {
+                    end.setFill();
+                    star.fill();
+                }
+            }
+            (TrayIconState::Idle, true) => {
+                // Warm amber attention badge with subtle halo.
+                NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.66, 0.14, 0.28).setFill();
+                let halo_r = 3.9;
+                NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+                    NSPoint::new(jx - halo_r, jy - halo_r),
+                    NSSize::new(halo_r * 2.0, halo_r * 2.0),
+                ))
+                .fill();
+
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.98, 0.62, 0.10, 1.0).setFill();
+                let dot_r = 2.6;
+                NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+                    NSPoint::new(jx - dot_r, jy - dot_r),
+                    NSSize::new(dot_r * 2.0, dot_r * 2.0),
+                ))
+                .fill();
+            }
+        }
+
+        Bool::YES
+    });
+
+    let img = NSImage::imageWithSize_flipped_drawingHandler(
+        NSSize::new(STATUS_ICON_WIDTH, STATUS_ICON_HEIGHT),
+        true,
+        &handler,
+    );
+    img.setTemplate(is_template);
+    let desc = match (state, warning) {
+        (TrayIconState::Listening, _) => "LIVI — Listening",
+        (TrayIconState::Polishing, _) => "LIVI — Polishing",
+        (TrayIconState::Idle, true) => "LIVI — Attention Required",
+        (TrayIconState::Idle, false) => "LIVI",
+    };
+    img.setAccessibilityDescription(Some(&NSString::from_str(desc)));
+    img
+}
+
+fn set_status_icon(
+    mtm: MainThreadMarker,
+    status_item: &NSStatusItem,
+    state: TrayIconState,
+    warning: bool,
+) {
+    let Some(button) = status_item.button(mtm) else {
         return;
     };
-    let symbol = match (state, warning) {
-        (TrayIconState::Listening, _) => "mic.fill",
-        (TrayIconState::Polishing, _) => "sparkles",
-        (TrayIconState::Idle, true) => "exclamationmark.triangle",
-        (TrayIconState::Idle, false) => "waveform",
-    };
-    if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str(symbol),
-        Some(&NSString::from_str("LIVI")),
-    ) {
-        img.setTemplate(true);
-        button.setImage(Some(&img));
-        button.setTitle(&NSString::from_str(""));
-    } else {
-        button.setTitle(&NSString::from_str("LIVI"));
-    }
+    let img = build_status_icon(state, warning);
+    button.setImage(Some(&img));
+    button.setTitle(&NSString::from_str(""));
 }
 
 pub fn init_on_main(mtm: MainThreadMarker, on_action: Arc<dyn Fn(TrayAction) + Send + Sync>) {
@@ -244,10 +405,11 @@ pub fn init_on_main(mtm: MainThreadMarker, on_action: Arc<dyn Fn(TrayAction) + S
         let bar = NSStatusBar::systemStatusBar();
         let status_item = bar.statusItemWithLength(NSVariableStatusItemLength);
         let target = LiviMenuTarget::new(mtm, on_action);
-        set_status_icon(&status_item, TrayIconState::Idle, false);
+        set_status_icon(mtm, &status_item, TrayIconState::Idle, false);
         *slot.borrow_mut() = Some(TrayInner {
             status_item,
             target,
+            last_icon: Cell::new(Some((TrayIconState::Idle, false))),
         });
     });
 }
@@ -267,18 +429,26 @@ pub fn update(snapshot: TraySnapshot) {
 
 fn rebuild_menu(mtm: MainThreadMarker, inner: &TrayInner, snap: &TraySnapshot) {
     let warning = !snap.permissions_ok || snap.secure_input_warning || snap.api_key_missing;
-    set_status_icon(&inner.status_item, snap.icon_state, warning);
+    let icon_key = (snap.icon_state, warning);
+    if inner.last_icon.get() != Some(icon_key) {
+        set_status_icon(mtm, &inner.status_item, snap.icon_state, warning);
+        inner.last_icon.set(Some(icon_key));
+    }
 
     let menu = NSMenu::new(mtm);
     menu.setAutoenablesItems(false);
 
     let t = &inner.target;
     let s = &snap.settings;
+    menu.setDelegate(Some(ProtocolObject::from_ref(&**t)));
 
     menu.addItem(&make_header(
         mtm,
         &format!("LIVI v{} — Gemini 3.5 Live", env!("CARGO_PKG_VERSION")),
     ));
+    let word_stats_item = make_header(mtm, &telemetry::word_stats().menu_label());
+    word_stats_item.setTag(TAG_WORD_STATS);
+    menu.addItem(&word_stats_item);
     if let Some(summary) = telemetry::last_latency_summary() {
         menu.addItem(&make_header(mtm, &summary.menu_label()));
     }
@@ -340,7 +510,7 @@ fn rebuild_menu(mtm: MainThreadMarker, inner: &TrayInner, snap: &TraySnapshot) {
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-    // Mode toggle
+    // Mode toggle & custom vocabulary
     menu.addItem(&make_item(
         mtm,
         "Smart Mode (Gemini 3.5)",
@@ -349,6 +519,23 @@ fn rebuild_menu(mtm: MainThreadMarker, inner: &TrayInner, snap: &TraySnapshot) {
         t,
         true,
         s.smart_mode,
+    ));
+    let vocab_count =
+        settings::normalize_custom_vocabulary(&s.custom_vocabulary, GEMINI_MAX_CUSTOM_VOCABULARY)
+            .len();
+    let vocab_title = if vocab_count == 0 {
+        "Custom Vocabulary…".to_string()
+    } else {
+        format!("Custom Vocabulary ({vocab_count})…")
+    };
+    menu.addItem(&make_item(
+        mtm,
+        &vocab_title,
+        "",
+        TAG_CUSTOM_VOCAB,
+        t,
+        true,
+        false,
     ));
 
     // Microphone submenu
@@ -635,6 +822,87 @@ pub fn prompt_api_key_on_main(current_key: String, on_save: impl FnOnce(String) 
         if response == NSAlertFirstButtonReturn {
             let new_key = field.stringValue().to_string().trim().to_string();
             on_save(new_key);
+        }
+    });
+}
+
+/// Shows a native modal alert to edit custom vocabulary phrases (one per line or comma-separated).
+pub fn prompt_custom_vocabulary_on_main(
+    current_words: Vec<String>,
+    on_save: impl FnOnce(Vec<String>) + Send + 'static,
+) {
+    DispatchQueue::main().exec_async(move || {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let app = NSApplication::sharedApplication(mtm);
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+
+        let normalized =
+            settings::normalize_custom_vocabulary(&current_words, GEMINI_MAX_CUSTOM_VOCABULARY);
+        let initial_text = settings::format_custom_vocabulary_input(&normalized);
+
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str("Custom Vocabulary"));
+        alert.setInformativeText(&NSString::from_str(&format!(
+            "Add words, names, or phrases to bias Gemini 3.5 recognition ({} / {} saved).\nEnter one per line or comma-separated. Press ⌘↵ to save.",
+            normalized.len(),
+            GEMINI_MAX_CUSTOM_VOCABULARY,
+        )));
+        let save_btn = alert.addButtonWithTitle(&NSString::from_str("Save"));
+        let _cancel_btn = alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+
+        let scroll_frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 180.0));
+        let scroll = NSScrollView::initWithFrame(mtm.alloc(), scroll_frame);
+        scroll.setBorderType(NSBorderType::BezelBorder);
+        scroll.setHasVerticalScroller(true);
+        scroll.setAutohidesScrollers(true);
+        scroll.setDrawsBackground(true);
+
+        let content_size = scroll.contentSize();
+        let text_view = NSTextView::initWithFrame(
+            mtm.alloc(),
+            NSRect::new(NSPoint::new(0.0, 0.0), content_size),
+        );
+        text_view.setEditable(true);
+        text_view.setSelectable(true);
+        text_view.setRichText(false);
+        text_view.setImportsGraphics(false);
+        text_view.setAllowsUndo(true);
+        text_view.setAutomaticQuoteSubstitutionEnabled(false);
+        text_view.setAutomaticDashSubstitutionEnabled(false);
+        text_view.setAutomaticTextReplacementEnabled(false);
+        text_view.setAutomaticSpellingCorrectionEnabled(false);
+        text_view.setContinuousSpellCheckingEnabled(false);
+        text_view.setDrawsBackground(true);
+        text_view.setFont(Some(&NSFont::systemFontOfSize(13.0)));
+        text_view.setTextContainerInset(NSSize::new(6.0, 6.0));
+        text_view.setMinSize(NSSize::new(0.0, content_size.height));
+        text_view.setMaxSize(NSSize::new(f64::MAX, f64::MAX));
+        text_view.setVerticallyResizable(true);
+        text_view.setHorizontallyResizable(false);
+        text_view.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+        if let Some(container) = unsafe { text_view.textContainer() } {
+            container.setContainerSize(NSSize::new(content_size.width, f64::MAX));
+            container.setWidthTracksTextView(true);
+        }
+        text_view.setString(&NSString::from_str(&initial_text));
+
+        scroll.setDocumentView(Some(&text_view));
+        alert.setAccessoryView(Some(&scroll));
+        alert.layout();
+        // Require ⌘↵ to submit so bare Return inserts a new line inside NSTextView.
+        save_btn.setKeyEquivalent(&NSString::from_str("\r"));
+        save_btn.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
+        let _ = alert.window().makeFirstResponder(Some(&text_view));
+
+        let response = alert.runModal();
+        if response == NSAlertFirstButtonReturn {
+            let raw = text_view.string().to_string();
+            let parsed =
+                settings::parse_custom_vocabulary_input(&raw, GEMINI_MAX_CUSTOM_VOCABULARY);
+            on_save(parsed);
         }
     });
 }

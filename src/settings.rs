@@ -230,6 +230,20 @@ pub fn normalize_custom_vocabulary(words: &[String], max_terms: usize) -> Vec<St
     out
 }
 
+/// Parses freeform custom vocabulary text (newline- or comma-separated) and normalizes it.
+pub fn parse_custom_vocabulary_input(raw: &str, max_terms: usize) -> Vec<String> {
+    let parts: Vec<String> = raw
+        .split(['\n', '\r', ','])
+        .map(str::to_string)
+        .collect();
+    normalize_custom_vocabulary(&parts, max_terms)
+}
+
+/// Formats saved custom vocabulary terms for multi-line editing (one phrase per line).
+pub fn format_custom_vocabulary_input(words: &[String]) -> String {
+    words.join("\n")
+}
+
 /// Formats a `handy-keys` binding string for human display on macOS (e.g., `"Right ⌥ + Right ⌘"`).
 pub fn format_shortcut_display(binding: &str) -> String {
     binding
@@ -303,5 +317,24 @@ mod tests {
             "Right ⌥ + Right ⌘"
         );
         assert_eq!(format_shortcut_display("option+space"), "⌥ + Space");
+    }
+
+    #[test]
+    fn parses_and_formats_custom_vocabulary_input() {
+        let parsed = parse_custom_vocabulary_input(
+            "  LIVI , Antigravity\r\nobjc2\n\n  livi , Google Cloud , ",
+            10,
+        );
+        assert_eq!(
+            parsed,
+            vec!["LIVI", "Antigravity", "objc2", "Google Cloud"]
+        );
+        assert_eq!(
+            format_custom_vocabulary_input(&parsed),
+            "LIVI\nAntigravity\nobjc2\nGoogle Cloud"
+        );
+
+        let capped = parse_custom_vocabulary_input("one, two, three", 2);
+        assert_eq!(capped, vec!["one", "two"]);
     }
 }
