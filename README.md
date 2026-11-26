@@ -59,6 +59,7 @@ Measured across 53 real-world **Smart Mode** dictation sessions on macOS with `g
 - **Rust** toolchain supporting **Edition 2024** (`rustc 1.85+`)
 - **Xcode Command Line Tools** (`codesign`, `sips`, `iconutil`) and `python3` (used by the install script to generate `Vibo.icns`)
 - A **Google Gemini API key** with access to `gemini-3.5-transcribe-live` ([how to create a Gemini API key](https://aistudio.google.com/docs/api-key))
+  - **Tip:** **Google AI Pro** subscribers receive **$10/month** in Google Cloud & Gemini API credits via the [Google Developer Program](https://developers.google.com/program) — see [how to claim monthly AI plan credits in Google AI Studio](https://aistudio.google.com/docs/google-ai-plans#claim-api-credits).
 
 ---
 
@@ -83,6 +84,7 @@ When rebuilding after code changes without wanting to re-grant macOS permissions
 ### 2. Configure API Key & Permissions
 
 1. Click the **Vibo** icon in the macOS menu bar and select **Set Gemini API Key…** (Vibo immediately verifies the key and displays the connection RTT). If you don't have a key yet, see the [official Gemini API key documentation](https://aistudio.google.com/docs/api-key).
+   - **Google AI Pro subscribers:** You get **$10/month** in Google Cloud & Gemini API credits through the [Google Developer Program](https://developers.google.com/program) that apply to your paid Gemini API key ([claim your monthly credits in AI Studio](https://aistudio.google.com/docs/google-ai-plans#claim-api-credits)).
    - Alternatively, set the `GEMINI_API_KEY` environment variable; Vibo falls back to it whenever `gemini_api_key` in `settings.json` is empty.
 2. Select **Permissions…** in the menu bar and grant:
    - **Microphone** — required to capture voice input.
