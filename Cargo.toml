@@ -1,0 +1,113 @@
+[package]
+name = "yada-livi"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "LIVI — Minimal pure-Rust native macOS dictation app powered by Gemini 3.5 Transcribe Live"
+
+[[bin]]
+name = "LIVI"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime & WebSocket transport (macOS Security.framework via native-tls)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+futures-util = "0.3"
+url = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.23"
+
+# State-of-the-art safe Rust lock-free audio capture & resampling
+cpal = "0.18.2"
+rtrb = "0.4"
+rubato = "5.1"
+rustfft = "6.4"
+
+# Global keyboard shortcuts (supports side-specific modifier-only combos + live capture)
+handy-keys = "0.3.5"
+
+# Unified native macOS bindings (UI, pasteboard, CGEvent paste, permissions, autostart)
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+    "NSArray",
+    "NSBundle",
+    "NSData",
+    "NSDictionary",
+    "NSGeometry",
+    "NSNotification",
+    "NSObject",
+    "NSRunLoop",
+    "NSString",
+    "NSThread",
+    "NSTimer",
+    "NSURL",
+    "block2",
+] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSAlert",
+    "NSApplication",
+    "NSBezierPath",
+    "NSButton",
+    "NSColor",
+    "NSControl",
+    "NSEvent",
+    "NSFont",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSLayoutConstraint",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPanel",
+    "NSPasteboard",
+    "NSProgressIndicator",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSSecureTextField",
+    "NSSound",
+    "NSStatusBar",
+    "NSStatusItem",
+    "NSTextField",
+    "NSView",
+    "NSVisualEffectView",
+    "NSWindow",
+    "NSWorkspace",
+    "block2",
+] }
+objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
+objc2-core-graphics = { version = "0.3", features = [
+    "CGEvent",
+    "CGEventTypes",
+    "CGEventSource",
+    "CGRemoteOperation",
+] }
+objc2-av-foundation = { version = "0.3", features = [
+    "AVCaptureDevice",
+    "AVMediaFormat",
+    "block2",
+] }
+objc2-service-management = { version = "0.3", features = ["SMAppService"] }
+block2 = "0.6"
+dispatch2 = "0.3"
+
+# State-of-the-art Rust observability & timestamps
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "tracing-log"] }
+tracing-appender = "0.2"
+jiff = { version = "1", default-features = false, features = ["std"] }
+
+# Utilities
+anyhow = "1"
+dirs = "7"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = "s"
