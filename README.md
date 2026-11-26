@@ -1,8 +1,35 @@
 # LIVI (`YADA-Livi`)
 
-**LIVI** is a minimal, pure-Rust native macOS menu bar dictation app powered by **Gemini 3.5 Transcribe Live** (`gemini-3.5-transcribe-live`).
+**LIVI** is a **low-latency, low-RAM**, pure-Rust native macOS menu bar dictation app powered by **Gemini 3.5 Transcribe Live** (`gemini-3.5-transcribe-live`).
 
-Built directly on AppKit, CoreGraphics, and CoreAudio with zero WebView overhead, LIVI streams microphone audio over a pre-warmed WebSocket connection and pastes finalized transcripts straight at your cursor while preserving your clipboard.
+Built directly on AppKit, CoreGraphics, and CoreAudio with zero Electron or WebView overhead, LIVI uses **~31 MB of RAM**, streams microphone audio over a pre-warmed WebSocket connection, and pastes finalized transcripts straight at your cursor in **~315 ms** while preserving your clipboard.
+
+---
+
+## Performance & Footprint
+
+Designed from the ground up to stay fast and out of your way:
+
+- **Low RAM Footprint**: **~31 MB** physical memory footprint (~44 MB RSS) in Activity Monitor — no Electron, WebView, or browser runtime.
+- **Tiny App Bundle**: **~3.8 MB** `/Applications/LIVI.app` (**3.3 MB** native release binary).
+- **Sub-Second Dictation**: Pre-warmed standby WebSockets, a lock-free audio capture ring buffer, and receipt-sequenced native pasting keep local overhead to a few milliseconds.
+
+### Observed Latencies
+
+Measured across 53 real-world **Smart Mode** dictation sessions on macOS with `gemini-3.5-transcribe-live` (44 warm standby pool hits, 9 cold connects):
+
+| Stage | Metric | Median (p50) | p90 | Range (min–max) | What it measures |
+| --- | --- | ---: | ---: | ---: | --- |
+| **Stop → Paste (End-to-End)** | `stop_to_paste_ms` | **314 ms** | 402 ms | 247–463 ms | Releasing the hotkey to text pasted at your cursor |
+| **Stop → Final Transcript** | `stop_to_final_ms` | **297 ms** | 380 ms | 229–446 ms | Hotkey release to finalized transcript received |
+| **Server Finalization** | `eos_to_final_ms` | **294 ms** | 377 ms | 226–441 ms | `activityEnd` sent to final Gemini response |
+| **Audio Flush** | `stop_to_eos_ms` | **2.6 ms** | 2.8 ms | 0.8–9.8 ms | Stop signal to final PCM chunk + `activityEnd` sent |
+| **WebSocket Attach (Warm)** | `connect_ms` | **0.2 ms** | 0.3 ms | 0.1–0.3 ms | Claiming a pre-warmed socket from the Standby Pool |
+| **WebSocket Attach (Cold)** | `connect_ms` | **194 ms** | — | 179–225 ms | Fresh TLS + WebSocket handshake + setup |
+| **Microphone Startup** | `mic_ready_ms` | **70 ms** | 73 ms | 58–94 ms | Opening CoreAudio input stream |
+| **Cursor Paste** | `paste_ms` | **1.7 ms** | 2.8 ms | 0.7–10.9 ms | `NSPasteboard` handoff and `Cmd+V` injection |
+
+> Network latency varies by connection and distance to Gemini API endpoints. Live per-run latency is always visible in the LIVI menu bar and logged to `~/Library/Logs/LIVI/transcriptions.jsonl`.
 
 ---
 
