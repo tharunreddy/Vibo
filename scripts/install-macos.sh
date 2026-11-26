@@ -137,7 +137,7 @@ mv "$STAGE_APP" "$INSTALL_PATH"
 
 if [[ "$RESET_PERMISSIONS" == "true" ]]; then
     echo "==> Resetting macOS TCC permissions for ${BUNDLE_ID}..."
-    tccutil reset All "$BUNDLE_ID"
+    tccutil reset All "$BUNDLE_ID" 2>/dev/null || true
 fi
 
 echo "==> Installed to ${INSTALL_PATH} ($(du -sh "$INSTALL_PATH" | awk '{print $1}'))"
