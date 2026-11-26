@@ -19,7 +19,7 @@ pub fn set_launch_at_login(enabled: bool) {
             return;
         }
         match unsafe { service.registerAndReturnError() } {
-            Ok(()) => tracing::info!("Registered LIVI login item via SMAppService"),
+            Ok(()) => tracing::info!("Registered Vibo login item via SMAppService"),
             Err(err) => tracing::warn!(error = %err, "Failed to register login item"),
         }
     } else {
@@ -27,7 +27,7 @@ pub fn set_launch_at_login(enabled: bool) {
             return;
         }
         match unsafe { service.unregisterAndReturnError() } {
-            Ok(()) => tracing::info!("Unregistered LIVI login item via SMAppService"),
+            Ok(()) => tracing::info!("Unregistered Vibo login item via SMAppService"),
             Err(err) => tracing::warn!(error = %err, "Failed to unregister login item"),
         }
     }

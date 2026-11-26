@@ -67,7 +67,7 @@ fn corner_radius_for_height(h: CGFloat) -> CGFloat {
 }
 
 fn waveform_bar_color(index: usize) -> Retained<NSColor> {
-    // Smooth high-luminance cyan -> icy white -> lavender gradient matching LIVI branding.
+    // Smooth high-luminance cyan -> icy white -> lavender gradient matching Vibo branding.
     let u = index as CGFloat / (WAVE_BARS - 1) as CGFloat;
     let (r, g, b) = if u <= 0.5 {
         let t = u * 2.0;
@@ -86,11 +86,11 @@ struct SurfaceIvars {
 define_class!(
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "LiviOverlaySurfaceView"]
+    #[name = "ViboOverlaySurfaceView"]
     #[ivars = SurfaceIvars]
-    struct LiviOverlaySurfaceView;
+    struct ViboOverlaySurfaceView;
 
-    impl LiviOverlaySurfaceView {
+    impl ViboOverlaySurfaceView {
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             let bounds = self.bounds();
@@ -183,7 +183,7 @@ define_class!(
     }
 );
 
-impl LiviOverlaySurfaceView {
+impl ViboOverlaySurfaceView {
     fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
         let this = mtm.alloc::<Self>().set_ivars(SurfaceIvars {
             accent: Cell::new(SurfaceAccent::WarmingUp),
@@ -205,11 +205,11 @@ struct WaveformIvars {
 define_class!(
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "LiviWaveformView"]
+    #[name = "ViboWaveformView"]
     #[ivars = WaveformIvars]
-    struct LiviWaveformView;
+    struct ViboWaveformView;
 
-    impl LiviWaveformView {
+    impl ViboWaveformView {
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             let bounds = self.bounds();
@@ -281,7 +281,7 @@ define_class!(
     }
 );
 
-impl LiviWaveformView {
+impl ViboWaveformView {
     fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
         let this = mtm.alloc::<Self>().set_ivars(WaveformIvars {
             levels: RefCell::new([0.0; WAVE_BARS]),
@@ -319,11 +319,11 @@ struct ButtonTargetIvars {
 define_class!(
     #[unsafe(super(objc2_foundation::NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "LiviOverlayActionTarget"]
+    #[name = "ViboOverlayActionTarget"]
     #[ivars = ButtonTargetIvars]
-    struct LiviOverlayActionTarget;
+    struct ViboOverlayActionTarget;
 
-    impl LiviOverlayActionTarget {
+    impl ViboOverlayActionTarget {
         #[unsafe(method(onCancelClicked:))]
         fn on_cancel_clicked(&self, _sender: *mut AnyObject) {
             (self.ivars().on_cancel)();
@@ -331,7 +331,7 @@ define_class!(
     }
 );
 
-impl LiviOverlayActionTarget {
+impl ViboOverlayActionTarget {
     fn new(mtm: MainThreadMarker, on_cancel: Arc<dyn Fn() + Send + Sync>) -> Retained<Self> {
         let this = mtm
             .alloc::<Self>()
@@ -342,13 +342,13 @@ impl LiviOverlayActionTarget {
 
 struct OverlayInner {
     panel: Retained<NSPanel>,
-    surface: Retained<LiviOverlaySurfaceView>,
+    surface: Retained<ViboOverlaySurfaceView>,
     mic_label: Retained<NSTextField>,
-    waveform: Retained<LiviWaveformView>,
+    waveform: Retained<ViboWaveformView>,
     spinner: Retained<NSProgressIndicator>,
     status_label: Retained<NSTextField>,
     cancel_btn: Retained<NSButton>,
-    _action_target: Retained<LiviOverlayActionTarget>,
+    _action_target: Retained<ViboOverlayActionTarget>,
     position: OverlayPosition,
     notice_mode: bool,
 }
@@ -458,7 +458,7 @@ pub fn init_on_main(mtm: MainThreadMarker, on_cancel: Arc<dyn Fn() + Send + Sync
             NSPoint::new(0.0, 0.0),
             NSSize::new(COMPACT_WIDTH, COMPACT_HEIGHT),
         );
-        let surface = LiviOverlaySurfaceView::new(mtm, content_bounds);
+        let surface = ViboOverlaySurfaceView::new(mtm, content_bounds);
         if let Some(ref appearance) = dark_appearance {
             surface.setAppearance(Some(appearance));
         }
@@ -476,7 +476,7 @@ pub fn init_on_main(mtm: MainThreadMarker, on_cancel: Arc<dyn Fn() + Send + Sync
             NSTextAlignment::Center,
         );
 
-        let waveform = LiviWaveformView::new(
+        let waveform = ViboWaveformView::new(
             mtm,
             NSRect::new(
                 NSPoint::new(12.0, 8.0),
@@ -507,7 +507,7 @@ pub fn init_on_main(mtm: MainThreadMarker, on_cancel: Arc<dyn Fn() + Send + Sync
         );
         status_label.setHidden(true);
 
-        let action_target = LiviOverlayActionTarget::new(mtm, on_cancel);
+        let action_target = ViboOverlayActionTarget::new(mtm, on_cancel);
         let cancel_btn = NSButton::initWithFrame(
             mtm.alloc(),
             NSRect::new(

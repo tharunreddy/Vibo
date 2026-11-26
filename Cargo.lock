@@ -2070,6 +2070,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
+name = "vibo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "block2",
+ "cpal",
+ "dirs",
+ "dispatch2",
+ "futures-util",
+ "handy-keys",
+ "jiff",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-av-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-service-management",
+ "rtrb",
+ "rubato",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "visibility"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2437,39 +2470,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
-]
-
-[[package]]
-name = "yada-livi"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "block2",
- "cpal",
- "dirs",
- "dispatch2",
- "futures-util",
- "handy-keys",
- "jiff",
- "objc2",
- "objc2-app-kit",
- "objc2-av-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "objc2-service-management",
- "rtrb",
- "rubato",
- "rustfft",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
 ]
 
 [[package]]

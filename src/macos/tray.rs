@@ -99,13 +99,13 @@ const TAG_MIC_BASE: isize = 1000;
 define_class!(
     #[unsafe(super(objc2_foundation::NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "LiviMenuTarget"]
+    #[name = "ViboMenuTarget"]
     #[ivars = MenuTargetIvars]
-    struct LiviMenuTarget;
+    struct ViboMenuTarget;
 
-    unsafe impl NSObjectProtocol for LiviMenuTarget {}
+    unsafe impl NSObjectProtocol for ViboMenuTarget {}
 
-    unsafe impl NSMenuDelegate for LiviMenuTarget {
+    unsafe impl NSMenuDelegate for ViboMenuTarget {
         #[unsafe(method(menuWillOpen:))]
         fn menu_will_open(&self, menu: &NSMenu) {
             if let Some(item) = menu.itemWithTag(TAG_WORD_STATS) {
@@ -115,7 +115,7 @@ define_class!(
         }
     }
 
-    impl LiviMenuTarget {
+    impl ViboMenuTarget {
         #[unsafe(method(onMenuItem:))]
         fn on_menu_item(&self, sender: *mut AnyObject) {
             if sender.is_null() {
@@ -167,7 +167,7 @@ define_class!(
     }
 );
 
-impl LiviMenuTarget {
+impl ViboMenuTarget {
     fn new(
         mtm: MainThreadMarker,
         on_action: Arc<dyn Fn(TrayAction) + Send + Sync>,
@@ -182,7 +182,7 @@ impl LiviMenuTarget {
 
 struct TrayInner {
     status_item: Retained<NSStatusItem>,
-    target: Retained<LiviMenuTarget>,
+    target: Retained<ViboMenuTarget>,
     last_icon: Cell<Option<(TrayIconState, bool)>>,
 }
 
@@ -195,7 +195,7 @@ fn make_item(
     title: &str,
     key_equiv: &str,
     tag: isize,
-    target: &LiviMenuTarget,
+    target: &ViboMenuTarget,
     enabled: bool,
     checked: bool,
 ) -> Retained<NSMenuItem> {
@@ -333,7 +333,7 @@ fn build_status_icon(state: TrayIconState, warning: bool) -> Retained<NSImage> {
                 .fill();
             }
             (TrayIconState::Polishing, _) => {
-                // Luminous cyan-to-violet Gemini sparkle matching LIVI branding.
+                // Luminous cyan-to-violet Gemini sparkle matching Vibo branding.
                 let star = gemini_sparkle_path(jx, jy, 4.6, 0.16);
                 let start = NSColor::colorWithSRGBRed_green_blue_alpha(0.20, 0.78, 1.0, 1.0);
                 let end = NSColor::colorWithSRGBRed_green_blue_alpha(0.56, 0.34, 1.0, 1.0);
@@ -376,10 +376,10 @@ fn build_status_icon(state: TrayIconState, warning: bool) -> Retained<NSImage> {
     );
     img.setTemplate(is_template);
     let desc = match (state, warning) {
-        (TrayIconState::Listening, _) => "LIVI — Listening",
-        (TrayIconState::Polishing, _) => "LIVI — Polishing",
-        (TrayIconState::Idle, true) => "LIVI — Attention Required",
-        (TrayIconState::Idle, false) => "LIVI",
+        (TrayIconState::Listening, _) => "Vibo — Listening",
+        (TrayIconState::Polishing, _) => "Vibo — Polishing",
+        (TrayIconState::Idle, true) => "Vibo — Attention Required",
+        (TrayIconState::Idle, false) => "Vibo",
     };
     img.setAccessibilityDescription(Some(&NSString::from_str(desc)));
     img
@@ -406,7 +406,7 @@ pub fn init_on_main(mtm: MainThreadMarker, on_action: Arc<dyn Fn(TrayAction) + S
         }
         let bar = NSStatusBar::systemStatusBar();
         let status_item = bar.statusItemWithLength(NSVariableStatusItemLength);
-        let target = LiviMenuTarget::new(mtm, on_action);
+        let target = ViboMenuTarget::new(mtm, on_action);
         set_status_icon(mtm, &status_item, TrayIconState::Idle, false);
         *slot.borrow_mut() = Some(TrayInner {
             status_item,
@@ -446,7 +446,7 @@ fn rebuild_menu(mtm: MainThreadMarker, inner: &TrayInner, snap: &TraySnapshot) {
 
     menu.addItem(&make_header(
         mtm,
-        &format!("LIVI v{} — Gemini 3.5 Live", env!("CARGO_PKG_VERSION")),
+        &format!("Vibo v{} — Gemini 3.5 Live", env!("CARGO_PKG_VERSION")),
     ));
     let word_stats_item = make_header(mtm, &telemetry::word_stats().menu_label());
     word_stats_item.setTag(TAG_WORD_STATS);
@@ -788,7 +788,7 @@ fn rebuild_menu(mtm: MainThreadMarker, inner: &TrayInner, snap: &TraySnapshot) {
     ));
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    menu.addItem(&make_item(mtm, "Quit LIVI", "q", TAG_QUIT, t, true, false));
+    menu.addItem(&make_item(mtm, "Quit Vibo", "q", TAG_QUIT, t, true, false));
 
     inner.status_item.setMenu(Some(&menu));
 }
@@ -806,7 +806,7 @@ pub fn prompt_api_key_on_main(current_key: String, on_save: impl FnOnce(String) 
         let alert = NSAlert::new(mtm);
         alert.setMessageText(&NSString::from_str("Gemini API Key"));
         alert.setInformativeText(&NSString::from_str(
-            "Enter your Google Gemini API key for Gemini 3.5 Transcribe Live.\nStored locally in ~/Library/Application Support/LIVI/settings.json.",
+            "Enter your Google Gemini API key for Gemini 3.5 Transcribe Live.\nStored locally in ~/Library/Application Support/Vibo/settings.json.",
         ));
         alert.addButtonWithTitle(&NSString::from_str("Save & Test"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
@@ -933,7 +933,7 @@ pub fn prompt_permissions_on_main(on_refresh: impl Fn() + Send + Sync + 'static)
         };
 
         let alert = NSAlert::new(mtm);
-        alert.setMessageText(&NSString::from_str("LIVI Permissions"));
+        alert.setMessageText(&NSString::from_str("Vibo Permissions"));
         alert.setInformativeText(&NSString::from_str(&format!(
             "Microphone: {mic_status}\nAccessibility: {acc_status}\n\nMicrophone is needed to record speech; Accessibility is needed for global shortcuts and pasting at your cursor."
         )));

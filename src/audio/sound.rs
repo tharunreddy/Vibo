@@ -19,7 +19,7 @@ fn resolve_sound_path(theme: SoundTheme, kind: ChimeKind) -> Option<PathBuf> {
         ChimeKind::Stop => theme.stop_filename(),
     };
 
-    // 1. Installed app bundle: LIVI.app/Contents/Resources/<filename>
+    // 1. Installed app bundle: Vibo.app/Contents/Resources/<filename>
     if let Some(res_path) = NSBundle::mainBundle().resourcePath() {
         let candidate = PathBuf::from(res_path.to_string()).join(filename);
         if candidate.is_file() {

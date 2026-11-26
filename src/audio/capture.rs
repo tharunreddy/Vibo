@@ -157,7 +157,7 @@ impl ActiveCapture {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop_flag);
         let consumer_thread = thread::Builder::new()
-            .name("livi-audio-consumer".into())
+            .name("vibo-audio-consumer".into())
             .spawn(move || {
                 run_consumer(
                     consumer, input_rate, started_at, stop_clone, on_audio, on_levels, on_ready,

@@ -1,4 +1,4 @@
-//! LIVI — Minimal pure-Rust native macOS dictation app powered by Gemini 3.5 Transcribe Live.
+//! Vibo — Minimal pure-Rust native macOS dictation app powered by Gemini 3.5 Transcribe Live.
 
 mod asr;
 mod audio;
@@ -73,7 +73,7 @@ fn main() {
     let _log_guard = telemetry::init_logging(&settings.log_level);
 
     if is_another_instance_running() {
-        tracing::info!("Another LIVI instance is already running; exiting");
+        tracing::info!("Another Vibo instance is already running; exiting");
         return;
     }
 
@@ -81,17 +81,17 @@ fn main() {
         version = env!("CARGO_PKG_VERSION"),
         shortcut = %settings.shortcut,
         smart_mode = settings.smart_mode,
-        "Starting LIVI"
+        "Starting Vibo"
     );
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
-        .thread_name("livi-tokio")
+        .thread_name("vibo-tokio")
         .build()
         .expect("Failed to create Tokio runtime");
 
-    let mtm = MainThreadMarker::new().expect("LIVI must start on the macOS main thread");
+    let mtm = MainThreadMarker::new().expect("Vibo must start on the macOS main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     install_standard_edit_menu(mtm, &app);

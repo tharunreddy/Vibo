@@ -1,16 +1,16 @@
 [package]
-name = "yada-livi"
+name = "vibo"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/tharunreddy/YADA-Livi"
+repository = "https://github.com/tharunreddy/Vibo"
 keywords = ["macos", "dictation", "speech-to-text", "gemini", "asr"]
 categories = ["multimedia::audio", "os::macos-apis"]
-description = "LIVI — Minimal pure-Rust native macOS dictation app powered by Gemini 3.5 Transcribe Live"
+description = "Vibo — Minimal pure-Rust native macOS dictation app powered by Gemini 3.5 Transcribe Live"
 
 [[bin]]
-name = "LIVI"
+name = "Vibo"
 path = "src/main.rs"
 
 [dependencies]

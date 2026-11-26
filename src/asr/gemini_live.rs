@@ -336,7 +336,7 @@ async fn connect_and_setup(
 ) -> Result<Socket, String> {
     let trimmed_secret = secret.trim();
     if trimmed_secret.is_empty() {
-        return Err("Gemini API key is not set. Configure it in the LIVI menu bar.".into());
+        return Err("Gemini API key is not set. Configure it in the Vibo menu bar.".into());
     }
     let base_endpoint = normalize_endpoint(endpoint);
     let parsed_url = validate_endpoint(base_endpoint)?;
@@ -1001,7 +1001,7 @@ fn start_session_with_pool(
     on_error: TextCallback,
 ) -> Result<WsStreamSession, String> {
     if secret.trim().is_empty() {
-        return Err("Gemini API key is not set. Configure it in the LIVI menu bar.".into());
+        return Err("Gemini API key is not set. Configure it in the Vibo menu bar.".into());
     }
     let endpoint = endpoint.to_string();
     let secret = secret.trim().to_string();
@@ -1091,7 +1091,7 @@ mod tests {
         let with_hints = setup_message(&GeminiSessionConfig {
             mode: TranscriptionMode::Smart,
             language_codes: vec!["en-US".into()],
-            custom_vocabulary: vec!["LIVI".into()],
+            custom_vocabulary: vec!["Vibo".into()],
         });
         assert_eq!(
             with_hints["setup"]["inputAudioTranscription"]["languageCodes"],
@@ -1099,7 +1099,7 @@ mod tests {
         );
         assert_eq!(
             with_hints["setup"]["inputAudioTranscription"]["customVocabulary"],
-            json!(["LIVI"])
+            json!(["Vibo"])
         );
     }
 

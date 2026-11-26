@@ -28,11 +28,11 @@ struct ProviderIvars {
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "LiviPasteProvider"]
+    #[name = "ViboPasteProvider"]
     #[ivars = ProviderIvars]
-    struct LiviPasteProvider;
+    struct ViboPasteProvider;
 
-    impl LiviPasteProvider {
+    impl ViboPasteProvider {
         #[unsafe(method(pasteboard:provideDataForType:))]
         fn pasteboard_provide_data_for_type(&self, pasteboard: &NSPasteboard, data_type: &NSString) {
             let ivars = self.ivars();
@@ -59,7 +59,7 @@ define_class!(
     }
 );
 
-impl LiviPasteProvider {
+impl ViboPasteProvider {
     fn new(state: Arc<Mutex<TxState>>, text: String) -> Retained<Self> {
         let this = Self::alloc().set_ivars(ProviderIvars { state, text });
         unsafe { msg_send![super(this), init] }
@@ -127,7 +127,7 @@ struct MacPending {
     state: Arc<Mutex<TxState>>,
     saved: SavedClipboard,
     change_count: NSInteger,
-    provider: Option<Retained<LiviPasteProvider>>,
+    provider: Option<Retained<ViboPasteProvider>>,
     preserve_clipboard: bool,
     transcript: String,
     held_chord: Option<HeldPasteChord>,
@@ -236,7 +236,7 @@ fn run_on_main(text: &str, preserve_clipboard: bool) -> Result<(), String> {
     };
 
     let state = Arc::new(Mutex::new(TxState::new()));
-    let provider = LiviPasteProvider::new(Arc::clone(&state), text.to_string());
+    let provider = ViboPasteProvider::new(Arc::clone(&state), text.to_string());
     let pasteboard = NSPasteboard::generalPasteboard();
 
     let mut types: Vec<Retained<NSString>> = Vec::with_capacity(1 + CONCEALMENT_TYPES.len());

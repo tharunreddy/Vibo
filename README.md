@@ -1,8 +1,8 @@
-# LIVI (`YADA-Livi`)
+# Vibo
 
-**LIVI** is a **low-latency, low-RAM**, pure-Rust native macOS menu bar dictation app powered by **Gemini 3.5 Transcribe Live** (`gemini-3.5-transcribe-live`).
+**Vibo** is a **low-latency, low-RAM**, pure-Rust native macOS menu bar dictation app powered by **Gemini 3.5 Transcribe Live** (`gemini-3.5-transcribe-live`).
 
-Built directly on AppKit, CoreGraphics, and CoreAudio with zero Electron or WebView overhead, LIVI uses **~31 MB of RAM**, streams microphone audio over a pre-warmed WebSocket connection, and pastes finalized transcripts straight at your cursor in **~315 ms** while preserving your clipboard.
+Built directly on AppKit, CoreGraphics, and CoreAudio with zero Electron or WebView overhead, Vibo uses **~31 MB of RAM**, streams microphone audio over a pre-warmed WebSocket connection, and pastes finalized transcripts straight at your cursor in **~315 ms** while preserving your clipboard.
 
 ---
 
@@ -11,7 +11,7 @@ Built directly on AppKit, CoreGraphics, and CoreAudio with zero Electron or WebV
 Designed from the ground up to stay fast and out of your way:
 
 - **Low RAM Footprint**: **~31 MB** physical memory footprint (~44 MB RSS) in Activity Monitor — no Electron, WebView, or browser runtime.
-- **Tiny App Bundle**: **~3.8 MB** `/Applications/LIVI.app` (**3.3 MB** native release binary).
+- **Tiny App Bundle**: **~3.8 MB** `/Applications/Vibo.app` (**3.3 MB** native release binary).
 - **Sub-Second Dictation**: Pre-warmed standby WebSockets, a lock-free audio capture ring buffer, and receipt-sequenced native pasting keep local overhead to a few milliseconds.
 
 ### Observed Latencies
@@ -29,7 +29,7 @@ Measured across 53 real-world **Smart Mode** dictation sessions on macOS with `g
 | **Microphone Startup** | `mic_ready_ms` | **70 ms** | 73 ms | 58–94 ms | Opening CoreAudio input stream |
 | **Cursor Paste** | `paste_ms` | **1.7 ms** | 2.8 ms | 0.7–10.9 ms | `NSPasteboard` handoff and `Cmd+V` injection |
 
-> Network latency varies by connection and distance to Gemini API endpoints. Live per-run latency is always visible in the LIVI menu bar and logged to `~/Library/Logs/LIVI/transcriptions.jsonl`.
+> Network latency varies by connection and distance to Gemini API endpoints. Live per-run latency is always visible in the Vibo menu bar and logged to `~/Library/Logs/Vibo/transcriptions.jsonl`.
 
 ---
 
@@ -57,22 +57,22 @@ Measured across 53 real-world **Smart Mode** dictation sessions on macOS with `g
 
 - **macOS 13.0+** (Ventura or later)
 - **Rust** toolchain supporting **Edition 2024** (`rustc 1.85+`)
-- **Xcode Command Line Tools** (`codesign`, `sips`, `iconutil`) and `python3` (used by the install script to generate `LIVI.icns`)
-- A **Google Gemini API key** with access to `gemini-3.5-transcribe-live`
+- **Xcode Command Line Tools** (`codesign`, `sips`, `iconutil`) and `python3` (used by the install script to generate `Vibo.icns`)
+- A **Google Gemini API key** with access to `gemini-3.5-transcribe-live` ([how to create a Gemini API key](https://aistudio.google.com/docs/api-key))
 
 ---
 
 ## Installation & Quick Start
 
-### 1. Build & Install `/Applications/LIVI.app`
+### 1. Build & Install `/Applications/Vibo.app`
 
 ```bash
-git clone https://github.com/tharunreddy/YADA-Livi.git
-cd YADA-Livi
+git clone https://github.com/tharunreddy/Vibo.git
+cd Vibo
 ./scripts/install-macos.sh
 ```
 
-The install script builds the release binary, generates the `LIVI.icns` app icon, assembles `/Applications/LIVI.app`, ad-hoc signs it with `macos/Entitlements.plist`, resets TCC permissions so macOS prompts cleanly for the new signature, and launches LIVI.
+The install script builds the release binary, generates the `Vibo.icns` app icon, assembles `/Applications/Vibo.app`, ad-hoc signs it with `macos/Entitlements.plist`, resets TCC permissions so macOS prompts cleanly for the new signature, and launches Vibo.
 
 When rebuilding after code changes without wanting to re-grant macOS permissions:
 
@@ -82,11 +82,11 @@ When rebuilding after code changes without wanting to re-grant macOS permissions
 
 ### 2. Configure API Key & Permissions
 
-1. Click the **LIVI** icon in the macOS menu bar and select **Set Gemini API Key…** (LIVI immediately verifies the key and displays the connection RTT).
-   - Alternatively, set the `GEMINI_API_KEY` environment variable; LIVI falls back to it whenever `gemini_api_key` in `settings.json` is empty.
+1. Click the **Vibo** icon in the macOS menu bar and select **Set Gemini API Key…** (Vibo immediately verifies the key and displays the connection RTT). If you don't have a key yet, see the [official Gemini API key documentation](https://aistudio.google.com/docs/api-key).
+   - Alternatively, set the `GEMINI_API_KEY` environment variable; Vibo falls back to it whenever `gemini_api_key` in `settings.json` is empty.
 2. Select **Permissions…** in the menu bar and grant:
    - **Microphone** — required to capture voice input.
-   - **Accessibility** — required for global hotkeys and `Cmd+V` paste injection. LIVI automatically starts its hotkey listener as soon as Accessibility is granted.
+   - **Accessibility** — required for global hotkeys and `Cmd+V` paste injection. Vibo automatically starts its hotkey listener as soon as Accessibility is granted.
 
 ### 3. Dictate Anywhere
 
@@ -103,7 +103,7 @@ Focus any text field and press **`Right ⌥ + Right ⌘`**:
 Settings are persisted atomically (with `0600` file permissions) at:
 
 ```text
-~/Library/Application Support/LIVI/settings.json
+~/Library/Application Support/Vibo/settings.json
 ```
 
 Most options can be changed directly from the menu bar; advanced options can be edited by choosing **Open settings.json** from the menu bar.
@@ -135,9 +135,9 @@ Most options can be changed directly from the menu bar; advanced options can be 
 
 ## Logs & Telemetry
 
-Choose **Open Logs Folder** from the menu bar or inspect `~/Library/Logs/LIVI/`:
+Choose **Open Logs Folder** from the menu bar or inspect `~/Library/Logs/Vibo/`:
 
-- **`livi.log.YYYY-MM-DD`** — Daily-rotating structured logs via `tracing` (7-day retention). Transcript text is never written to application logs.
+- **`vibo.log.YYYY-MM-DD`** — Daily-rotating structured logs via `tracing` (7-day retention). Transcript text is never written to application logs.
 - **`transcriptions.jsonl`** — Append-only per-dictation latency records (`schema_version: 1`) containing:
   - `outcome` (`success`, `empty`, `silent`, `failed`, `cancelled`), `mode`, `model`, `standby_hit`
   - Latency milestones in ms: `audio_duration_ms`, `mic_ready_ms`, `connect_ms`, `first_partial_ms`, `stop_to_eos_ms`, `eos_to_final_ms`, `stop_to_final_ms`, `paste_ms`, `stop_to_paste_ms`
@@ -160,3 +160,7 @@ RUST_LOG=debug cargo run
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+*Vibo is an independent open-source project and is not affiliated with or endorsed by Google. Gemini is a trademark of Google LLC.*

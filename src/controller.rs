@@ -285,7 +285,7 @@ impl AppController {
         let s = self.settings_snapshot();
         if s.effective_api_key().is_empty() {
             overlay::show_notice(
-                "Set Gemini API Key in LIVI menu".into(),
+                "Set Gemini API Key in Vibo menu".into(),
                 overlay::NoticeKind::Warning,
                 s.overlay_position,
             );

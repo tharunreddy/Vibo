@@ -1,4 +1,4 @@
-//! Persistent JSON settings for LIVI (`~/Library/Application Support/LIVI/settings.json`).
+//! Persistent JSON settings for Vibo (`~/Library/Application Support/Vibo/settings.json`).
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-pub const APP_NAME: &str = "LIVI";
+pub const APP_NAME: &str = "Vibo";
 pub const DEFAULT_GEMINI_LIVE_ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 pub const DEFAULT_SHORTCUT: &str = "option_right+command_right";
 pub const DEFAULT_HOLD_THRESHOLD_MS: u64 = 300;
@@ -319,13 +319,13 @@ mod tests {
     #[test]
     fn parses_and_formats_custom_vocabulary_input() {
         let parsed = parse_custom_vocabulary_input(
-            "  LIVI , Antigravity\r\nobjc2\n\n  livi , Google Cloud , ",
+            "  Vibo , Antigravity\r\nobjc2\n\n  vibo , Google Cloud , ",
             10,
         );
-        assert_eq!(parsed, vec!["LIVI", "Antigravity", "objc2", "Google Cloud"]);
+        assert_eq!(parsed, vec!["Vibo", "Antigravity", "objc2", "Google Cloud"]);
         assert_eq!(
             format_custom_vocabulary_input(&parsed),
-            "LIVI\nAntigravity\nobjc2\nGoogle Cloud"
+            "Vibo\nAntigravity\nobjc2\nGoogle Cloud"
         );
 
         let capped = parse_custom_vocabulary_input("one, two, three", 2);

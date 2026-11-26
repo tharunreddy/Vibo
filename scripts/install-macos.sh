@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="LIVI"
-BUNDLE_ID="com.yada.livi"
+APP_NAME="Vibo"
+BUNDLE_ID="io.github.tharunreddy.vibo"
 INSTALL_PATH="/Applications/${APP_NAME}.app"
 RESET_PERMISSIONS=true
 

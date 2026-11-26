@@ -1,5 +1,5 @@
 //! State-of-the-art Rust observability (`tracing` + `tracing-subscriber` + `tracing-appender`)
-//! and structured per-dictation latency telemetry (`~/Library/Logs/LIVI/transcriptions.jsonl`).
+//! and structured per-dictation latency telemetry (`~/Library/Logs/Vibo/transcriptions.jsonl`).
 
 use crate::asr::AsrTimings;
 use crate::settings;
@@ -21,7 +21,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
 pub const JSONL_FILE_NAME: &str = "transcriptions.jsonl";
-const LOG_FILE_PREFIX: &str = "livi.log";
+const LOG_FILE_PREFIX: &str = "vibo.log";
 const MAX_ROTATED_LOG_FILES: usize = 7;
 
 static NEXT_RUN_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -239,7 +239,7 @@ impl DictationOutcome {
     }
 }
 
-/// Structured per-dictation latency record appended to `~/Library/Logs/LIVI/transcriptions.jsonl`.
+/// Structured per-dictation latency record appended to `~/Library/Logs/Vibo/transcriptions.jsonl`.
 #[derive(Debug, Clone, Serialize)]
 pub struct DictationRecord {
     pub schema_version: u8,
@@ -386,7 +386,7 @@ pub fn append_jsonl(path: &Path, record: &DictationRecord) -> io::Result<()> {
 }
 
 /// Initializes the global `tracing` subscriber with non-blocking daily-rolling log files
-/// under `~/Library/Logs/LIVI/` (7-day retention) plus stderr when attached to a TTY.
+/// under `~/Library/Logs/Vibo/` (7-day retention) plus stderr when attached to a TTY.
 ///
 /// The returned `WorkerGuard` MUST be kept alive for the lifetime of the process so
 /// buffered log lines flush cleanly on exit.
