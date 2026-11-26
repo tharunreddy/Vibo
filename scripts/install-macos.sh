@@ -112,7 +112,7 @@ for sz in 16 32 128 256 512; do
     sz2=$((sz * 2))
     sips -z "$sz2" "$sz2" "$ICON_WORK/icon_1024.png" --out "$ICONSET/icon_${sz}x${sz}@2x.png" >/dev/null
 done
-iconutil -c icns "$ICONSET" -o "$ROOT_DIR/resources/${APP_NAME}.icns"
+iconutil -c icns "$ICONSET" -o "$ICON_WORK/${APP_NAME}.icns"
 
 echo "==> Assembling ${APP_NAME}.app bundle..."
 STAGE_APP="$ICON_WORK/${APP_NAME}.app"
@@ -121,7 +121,7 @@ cp "$BIN_PATH" "$STAGE_APP/Contents/MacOS/${APP_NAME}"
 chmod +x "$STAGE_APP/Contents/MacOS/${APP_NAME}"
 cp "$ROOT_DIR/macos/Info.plist" "$STAGE_APP/Contents/Info.plist"
 cp "$ROOT_DIR/resources/"*.wav "$STAGE_APP/Contents/Resources/"
-cp "$ROOT_DIR/resources/${APP_NAME}.icns" "$STAGE_APP/Contents/Resources/${APP_NAME}.icns"
+cp "$ICON_WORK/${APP_NAME}.icns" "$STAGE_APP/Contents/Resources/${APP_NAME}.icns"
 
 echo "==> Signing ${APP_NAME}.app with Entitlements.plist..."
 codesign --force --deep --sign - --entitlements "$ROOT_DIR/macos/Entitlements.plist" "$STAGE_APP"

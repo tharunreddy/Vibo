@@ -12,7 +12,9 @@ use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
-use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{
+    AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSBackingStoreType,
     NSBezierPath, NSButton, NSCellImagePosition, NSColor, NSControlSize, NSEvent, NSFont,
@@ -69,18 +71,10 @@ fn waveform_bar_color(index: usize) -> Retained<NSColor> {
     let u = index as CGFloat / (WAVE_BARS - 1) as CGFloat;
     let (r, g, b) = if u <= 0.5 {
         let t = u * 2.0;
-        (
-            0.34 + (0.88 - 0.34) * t,
-            0.88 + (0.97 - 0.88) * t,
-            1.0,
-        )
+        (0.34 + (0.88 - 0.34) * t, 0.88 + (0.97 - 0.88) * t, 1.0)
     } else {
         let t = (u - 0.5) * 2.0;
-        (
-            0.88 + (0.76 - 0.88) * t,
-            0.97 + (0.60 - 0.97) * t,
-            1.0,
-        )
+        (0.88 + (0.76 - 0.88) * t, 0.97 + (0.60 - 0.97) * t, 1.0)
     };
     NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 0.98)
 }

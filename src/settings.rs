@@ -232,10 +232,7 @@ pub fn normalize_custom_vocabulary(words: &[String], max_terms: usize) -> Vec<St
 
 /// Parses freeform custom vocabulary text (newline- or comma-separated) and normalizes it.
 pub fn parse_custom_vocabulary_input(raw: &str, max_terms: usize) -> Vec<String> {
-    let parts: Vec<String> = raw
-        .split(['\n', '\r', ','])
-        .map(str::to_string)
-        .collect();
+    let parts: Vec<String> = raw.split(['\n', '\r', ',']).map(str::to_string).collect();
     normalize_custom_vocabulary(&parts, max_terms)
 }
 
@@ -325,10 +322,7 @@ mod tests {
             "  LIVI , Antigravity\r\nobjc2\n\n  livi , Google Cloud , ",
             10,
         );
-        assert_eq!(
-            parsed,
-            vec!["LIVI", "Antigravity", "objc2", "Google Cloud"]
-        );
+        assert_eq!(parsed, vec!["LIVI", "Antigravity", "objc2", "Google Cloud"]);
         assert_eq!(
             format_custom_vocabulary_input(&parsed),
             "LIVI\nAntigravity\nobjc2\nGoogle Cloud"

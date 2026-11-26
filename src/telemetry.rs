@@ -9,6 +9,7 @@ use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -376,7 +377,9 @@ pub fn append_jsonl(path: &Path, record: &DictationRecord) -> io::Result<()> {
         .create(true)
         .read(true)
         .append(true)
+        .mode(0o600)
         .open(path)?;
+    let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
     file.lock()?;
     file.write_all(&line)?;
     file.flush()
@@ -454,6 +457,9 @@ mod tests {
         rec.set_transcript("Hello world.", true);
 
         append_jsonl(&path, &rec).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
 
         let contents = fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(contents.trim()).unwrap();
@@ -534,16 +540,29 @@ mod tests {
         let day1 = jiff::civil::date(2026, 11, 26);
         let day2 = jiff::civil::date(2026, 11, 27);
 
-        let initial = r#"{"timestamp":"2026-11-26T19:00:00Z","outcome":"success","transcript_words":10}"#;
+        let initial =
+            r#"{"timestamp":"2026-11-26T19:00:00Z","outcome":"success","transcript_words":10}"#;
         fs::write(&path, format!("{initial}\n")).unwrap();
 
         let mut cache = WordStatsCache::new();
         cache.ensure_current(&path, day1, &tz);
-        assert_eq!(cache.stats, WordStats { today: 10, total: 10 });
+        assert_eq!(
+            cache.stats,
+            WordStats {
+                today: 10,
+                total: 10
+            }
+        );
 
         // Live dictation arrives on day1.
         cache.add_record(&path, "2026-11-26T20:00:00Z", 7, day1, &tz);
-        assert_eq!(cache.stats, WordStats { today: 17, total: 17 });
+        assert_eq!(
+            cache.stats,
+            WordStats {
+                today: 17,
+                total: 17
+            }
+        );
 
         // Persist the second record to disk as log_and_persist would.
         let mut f = OpenOptions::new().append(true).open(&path).unwrap();
@@ -555,6 +574,12 @@ mod tests {
 
         // After midnight rollover to day2, today resets to 0 while total stays 17.
         cache.ensure_current(&path, day2, &tz);
-        assert_eq!(cache.stats, WordStats { today: 0, total: 17 });
+        assert_eq!(
+            cache.stats,
+            WordStats {
+                today: 0,
+                total: 17
+            }
+        );
     }
 }

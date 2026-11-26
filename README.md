@@ -45,7 +45,7 @@ cd YADA-Livi
 ./scripts/install-macos.sh
 ```
 
-The install script builds the release binary, generates `resources/LIVI.icns`, assembles `/Applications/LIVI.app`, ad-hoc signs it with `macos/Entitlements.plist`, resets TCC permissions so macOS prompts cleanly for the new signature, and launches LIVI.
+The install script builds the release binary, generates the `LIVI.icns` app icon, assembles `/Applications/LIVI.app`, ad-hoc signs it with `macos/Entitlements.plist`, resets TCC permissions so macOS prompts cleanly for the new signature, and launches LIVI.
 
 When rebuilding after code changes without wanting to re-grant macOS permissions:
 
@@ -126,42 +126,6 @@ cargo test
 
 # Run locally in debug mode (logs also print to stderr when attached to a TTY)
 RUST_LOG=debug cargo run
-```
-
-### Project Layout
-
-```text
-├── Cargo.toml
-├── macos/
-│   ├── Info.plist              # Accessory bundle metadata (macOS 13+, LSUIElement)
-│   └── Entitlements.plist      # Microphone / audio-input entitlements
-├── resources/                  # Start/stop chime WAVs and generated LIVI.icns
-├── scripts/
-│   └── install-macos.sh        # Release build, icon generation, signing & /Applications install
-└── src/
-    ├── main.rs                 # NSApplication bootstrap, Edit menu, single-instance guard
-    ├── controller.rs           # Central dictation state machine & tray action coordinator
-    ├── settings.rs             # Persistent JSON config, shortcut formatting, vocab normalization
-    ├── hotkeys.rs              # Global shortcuts, dynamic Esc cancel, live capture (handy-keys)
-    ├── secure_input.rs         # Carbon IsSecureEventInputEnabled detection
-    ├── telemetry.rs            # tracing-appender logs, JSONL latency telemetry, word stats
-    ├── asr/
-    │   ├── mod.rs              # Pluggable AsrProvider / AsrSession traits & timing structs
-    │   ├── ws_session.rs       # Provider-neutral paced/coalesced WebSocket streaming session
-    │   └── gemini_live.rs      # Gemini 3.5 Transcribe Live protocol & pre-warmed StandbyPool
-    ├── audio/
-    │   ├── capture.rs          # Lock-free cpal + rtrb + rubato 16 kHz mono capture pipeline
-    │   ├── visualizer.rs       # 512-sample Hann-window FFT spectrum analyzer
-    │   └── sound.rs            # Native NSSound chime playback
-    ├── paste/
-    │   ├── mod.rs              # Receipt-sequenced paste state machine
-    │   ├── macos.rs            # NSPasteboard lazy promise provider & clipboard restoration
-    │   └── input.rs            # Carbon TIS layout-aware Cmd+V CGEvent injection
-    └── macos/
-        ├── tray.rs             # NSStatusItem custom vector icon, menu, and native NSAlert dialogs
-        ├── overlay.rs          # Floating DarkAqua NSPanel pill overlay & 9-bar waveform view
-        ├── permissions.rs      # AVFoundation Microphone & AX Accessibility checks/deep links
-        └── autostart.rs        # SMAppService Launch at Login integration
 ```
 
 ---

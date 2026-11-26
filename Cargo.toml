@@ -3,6 +3,10 @@ name = "yada-livi"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tharunreddy/YADA-Livi"
+keywords = ["macos", "dictation", "speech-to-text", "gemini", "asr"]
+categories = ["multimedia::audio", "os::macos-apis"]
 description = "LIVI — Minimal pure-Rust native macOS dictation app powered by Gemini 3.5 Transcribe Live"
 
 [[bin]]

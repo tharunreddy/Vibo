@@ -27,12 +27,16 @@ fn resolve_sound_path(theme: SoundTheme, kind: ChimeKind) -> Option<PathBuf> {
         }
     }
 
-    // 2. Local development fallback: ./resources/<filename>
-    let dev_candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources")
-        .join(filename);
-    if dev_candidate.is_file() {
-        return Some(dev_candidate);
+    // 2. Local development fallback: ./resources/<filename> (debug builds only, so release
+    //    binaries never embed the builder's local filesystem path).
+    #[cfg(debug_assertions)]
+    {
+        let dev_candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(filename);
+        if dev_candidate.is_file() {
+            return Some(dev_candidate);
+        }
     }
 
     None
