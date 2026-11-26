@@ -1,19 +1,23 @@
 //! Native macOS non-activating floating `NSPanel` compact pill overlay (zero WebView).
 //!
-//! Renders a dark translucent pill (`NSVisualEffectView`, `HUDWindow` material) with:
-//! - Listening (`284 × 62 pt`): mic name, pulsing dot, 9-bar FFT waveform, cancel `×`
+//! Renders a high-contrast dark obsidian pill (forced `DarkAqua` appearance + solid-feeling
+//! deep obsidian gradient surface + dual dark-outer / luminous-inner rim, with no vibrancy
+//! bleed-through) so it stays crisp and legible over both Light Mode and Dark Mode windows:
+//! - Listening (`284 × 62 pt`): mic name, glowing status dot, 9-bar FFT waveform, cancel `×`
 //! - Polishing (`284 × 62 pt`): spinning `NSProgressIndicator` + `"Polishing…"` + cancel `×`
 //! - Notice (`310 × 44 pt`): compact error/warning pill auto-dismissed after 4 seconds
 
 use crate::settings::OverlayPosition;
+use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::runtime::{AnyObject, Bool};
+use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSBezierPath, NSButton, NSColor, NSControlSize, NSEvent, NSFont, NSPanel,
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSBackingStoreType,
+    NSBezierPath, NSButton, NSCellImagePosition, NSColor, NSControlSize, NSEvent, NSFont,
+    NSFontWeightMedium, NSFontWeightSemibold, NSGradient, NSImage, NSLineCapStyle, NSPanel,
     NSProgressIndicator, NSProgressIndicatorStyle, NSScreen, NSTextAlignment, NSTextField, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -43,6 +47,162 @@ pub enum NoticeKind {
     Warning,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SurfaceAccent {
+    WarmingUp,
+    Listening,
+    Polishing,
+    Error,
+    Warning,
+}
+
+fn corner_radius_for_height(h: CGFloat) -> CGFloat {
+    if h <= NOTICE_HEIGHT + 1.0 {
+        h / 2.0
+    } else {
+        22.0
+    }
+}
+
+fn waveform_bar_color(index: usize) -> Retained<NSColor> {
+    // Smooth high-luminance cyan -> icy white -> lavender gradient matching LIVI branding.
+    let u = index as CGFloat / (WAVE_BARS - 1) as CGFloat;
+    let (r, g, b) = if u <= 0.5 {
+        let t = u * 2.0;
+        (
+            0.34 + (0.88 - 0.34) * t,
+            0.88 + (0.97 - 0.88) * t,
+            1.0,
+        )
+    } else {
+        let t = (u - 0.5) * 2.0;
+        (
+            0.88 + (0.76 - 0.88) * t,
+            0.97 + (0.60 - 0.97) * t,
+            1.0,
+        )
+    };
+    NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 0.98)
+}
+
+struct SurfaceIvars {
+    accent: Cell<SurfaceAccent>,
+}
+
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "LiviOverlaySurfaceView"]
+    #[ivars = SurfaceIvars]
+    struct LiviOverlaySurfaceView;
+
+    impl LiviOverlaySurfaceView {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            let bounds = self.bounds();
+            let radius = corner_radius_for_height(bounds.size.height);
+            let accent = self.ivars().accent.get();
+
+            // Deep high-opacity obsidian gradient so bright/colorful backgrounds never bleed
+            // through and wash out the foreground elements.
+            let fill_path =
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, radius, radius);
+            let top_bg = NSColor::colorWithSRGBRed_green_blue_alpha(0.09, 0.11, 0.16, 0.96);
+            let bottom_bg = NSColor::colorWithSRGBRed_green_blue_alpha(0.04, 0.05, 0.09, 0.98);
+            if let Some(grad) = NSGradient::initWithStartingColor_endingColor(
+                NSGradient::alloc(),
+                &bottom_bg,
+                &top_bg,
+            ) {
+                grad.drawInBezierPath_angle(&fill_path, 90.0);
+            } else {
+                top_bg.setFill();
+                fill_path.fill();
+            }
+
+            // Subtle state-matched wash for errors/warnings so alerts are instantly scannable.
+            let wash = match accent {
+                SurfaceAccent::Error => {
+                    Some(NSColor::colorWithSRGBRed_green_blue_alpha(0.95, 0.24, 0.28, 0.12))
+                }
+                SurfaceAccent::Warning => {
+                    Some(NSColor::colorWithSRGBRed_green_blue_alpha(0.98, 0.72, 0.20, 0.10))
+                }
+                _ => None,
+            };
+            if let Some(wash_color) = wash {
+                wash_color.setFill();
+                fill_path.fill();
+            }
+
+            // Inner luminous accent rim so the pill stands out cleanly on dark backgrounds.
+            let inner_inset: CGFloat = 1.5;
+            let inner_rect = NSRect::new(
+                NSPoint::new(bounds.origin.x + inner_inset, bounds.origin.y + inner_inset),
+                NSSize::new(
+                    (bounds.size.width - inner_inset * 2.0).max(0.0),
+                    (bounds.size.height - inner_inset * 2.0).max(0.0),
+                ),
+            );
+            let inner_r = (radius - inner_inset).max(0.0);
+            let inner_path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                inner_rect, inner_r, inner_r,
+            );
+            let inner_rim = match accent {
+                SurfaceAccent::WarmingUp => {
+                    NSColor::colorWithSRGBRed_green_blue_alpha(0.84, 0.90, 1.0, 0.34)
+                }
+                SurfaceAccent::Listening => {
+                    NSColor::colorWithSRGBRed_green_blue_alpha(0.45, 0.88, 1.0, 0.46)
+                }
+                SurfaceAccent::Polishing => {
+                    NSColor::colorWithSRGBRed_green_blue_alpha(0.68, 0.56, 1.0, 0.52)
+                }
+                SurfaceAccent::Error => {
+                    NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.46, 0.46, 0.68)
+                }
+                SurfaceAccent::Warning => {
+                    NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.80, 0.32, 0.62)
+                }
+            };
+            inner_rim.setStroke();
+            inner_path.setLineWidth(1.25);
+            inner_path.stroke();
+
+            // Outer dark hairline so the pill edge stays razor-sharp against bright white pages.
+            let outer_inset: CGFloat = 0.5;
+            let outer_rect = NSRect::new(
+                NSPoint::new(bounds.origin.x + outer_inset, bounds.origin.y + outer_inset),
+                NSSize::new(
+                    (bounds.size.width - outer_inset * 2.0).max(0.0),
+                    (bounds.size.height - outer_inset * 2.0).max(0.0),
+                ),
+            );
+            let outer_r = (radius - outer_inset).max(0.0);
+            let outer_path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                outer_rect, outer_r, outer_r,
+            );
+            NSColor::colorWithSRGBRed_green_blue_alpha(0.0, 0.0, 0.0, 0.78).setStroke();
+            outer_path.setLineWidth(1.0);
+            outer_path.stroke();
+        }
+    }
+);
+
+impl LiviOverlaySurfaceView {
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(SurfaceIvars {
+            accent: Cell::new(SurfaceAccent::WarmingUp),
+        });
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+
+    fn set_accent(&self, accent: SurfaceAccent) {
+        self.ivars().accent.set(accent);
+        self.setNeedsDisplay(true);
+    }
+}
+
 struct WaveformIvars {
     levels: RefCell<[f32; WAVE_BARS]>,
     ready: Cell<bool>,
@@ -62,46 +222,65 @@ define_class!(
             let levels = self.ivars().levels.borrow();
             let ready = self.ivars().ready.get();
 
-            // Pulsing recording dot on the left.
-            let dot_size: CGFloat = 8.0;
-            let dot_x: CGFloat = 8.0;
-            let dot_y = (bounds.size.height - dot_size) / 2.0;
-            let dot_color = if ready {
-                NSColor::colorWithSRGBRed_green_blue_alpha(0.98, 0.36, 0.38, 0.98)
+            // Glowing live recording status dot on the left.
+            let dot_cx: CGFloat = 13.0;
+            let dot_cy = bounds.size.height / 2.0;
+
+            let halo_r: CGFloat = 6.5;
+            let halo_color = if ready {
+                NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.30, 0.35, 0.30)
             } else {
-                NSColor::colorWithSRGBRed_green_blue_alpha(0.98, 0.72, 0.25, 0.85)
+                NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.78, 0.24, 0.28)
+            };
+            halo_color.setFill();
+            NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+                NSPoint::new(dot_cx - halo_r, dot_cy - halo_r),
+                NSSize::new(halo_r * 2.0, halo_r * 2.0),
+            ))
+            .fill();
+
+            let dot_r: CGFloat = 4.25;
+            let dot_color = if ready {
+                NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.32, 0.36, 1.0)
+            } else {
+                NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.78, 0.24, 1.0)
             };
             dot_color.setFill();
-            let dot = NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
-                NSPoint::new(dot_x, dot_y),
-                NSSize::new(dot_size, dot_size),
-            ));
-            dot.fill();
+            NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+                NSPoint::new(dot_cx - dot_r, dot_cy - dot_r),
+                NSSize::new(dot_r * 2.0, dot_r * 2.0),
+            ))
+            .fill();
 
-            // 9 centered rounded waveform bars.
-            let bar_w: CGFloat = 3.5;
-            let gap: CGFloat = 5.0;
+            // 9 centered rounded high-contrast waveform bars.
+            let bar_w: CGFloat = 4.0;
+            let gap: CGFloat = 5.5;
             let total_w = (WAVE_BARS as CGFloat) * bar_w + ((WAVE_BARS - 1) as CGFloat) * gap;
             let start_x = (bounds.size.width - total_w) / 2.0 + 4.0;
             let mid_y = bounds.size.height / 2.0;
 
-            let bar_color = if ready {
-                NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 1.0, 1.0, 0.92)
-            } else {
-                NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 1.0, 1.0, 0.35)
-            };
-            bar_color.setFill();
+            let standby_color =
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.76, 0.85, 0.98, 0.58);
 
             for (i, &val) in levels.iter().enumerate() {
-                let h = if ready {
-                    (3.5 + (val.clamp(0.0, 1.0) as CGFloat).powf(0.7) * 16.5).clamp(3.5, 20.0)
+                if ready {
+                    waveform_bar_color(i).setFill();
                 } else {
-                    4.0
+                    standby_color.setFill();
+                }
+                let h = if ready {
+                    (4.5 + (val.clamp(0.0, 1.0) as CGFloat).powf(0.65) * 17.5).clamp(4.5, 22.0)
+                } else {
+                    4.5
                 };
                 let x = start_x + (i as CGFloat) * (bar_w + gap);
                 let y = mid_y - h / 2.0;
                 let rect = NSRect::new(NSPoint::new(x, y), NSSize::new(bar_w, h));
-                let pill = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 1.75, 1.75);
+                let pill = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                    rect,
+                    bar_w / 2.0,
+                    bar_w / 2.0,
+                );
                 pill.fill();
             }
         }
@@ -169,7 +348,7 @@ impl LiviOverlayActionTarget {
 
 struct OverlayInner {
     panel: Retained<NSPanel>,
-    blur: Retained<NSVisualEffectView>,
+    surface: Retained<LiviOverlaySurfaceView>,
     mic_label: Retained<NSTextField>,
     waveform: Retained<LiviWaveformView>,
     spinner: Retained<NSProgressIndicator>,
@@ -184,11 +363,52 @@ thread_local! {
     static OVERLAY: RefCell<Option<OverlayInner>> = const { RefCell::new(None) };
 }
 
+fn build_cancel_icon() -> Retained<NSImage> {
+    let size = NSSize::new(22.0, 22.0);
+    let handler = RcBlock::new(|dst_rect: NSRect| -> Bool {
+        let ox = dst_rect.origin.x;
+        let oy = dst_rect.origin.y;
+        let w = dst_rect.size.width;
+        let h = dst_rect.size.height;
+
+        // Subtle circular pill backing so the close affordance is always crisp and clear.
+        let badge = NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+            NSPoint::new(ox + 1.0, oy + 1.0),
+            NSSize::new(w - 2.0, h - 2.0),
+        ));
+        NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 1.0, 1.0, 0.14).setFill();
+        badge.fill();
+        NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 1.0, 1.0, 0.28).setStroke();
+        badge.setLineWidth(0.9);
+        badge.stroke();
+
+        // Crisp high-contrast white cross.
+        let cx = ox + w / 2.0;
+        let cy = oy + h / 2.0;
+        let arm: CGFloat = 3.6;
+        let cross = NSBezierPath::bezierPath();
+        cross.moveToPoint(NSPoint::new(cx - arm, cy - arm));
+        cross.lineToPoint(NSPoint::new(cx + arm, cy + arm));
+        cross.moveToPoint(NSPoint::new(cx + arm, cy - arm));
+        cross.lineToPoint(NSPoint::new(cx - arm, cy + arm));
+        cross.setLineWidth(1.6);
+        cross.setLineCapStyle(NSLineCapStyle::Round);
+        NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 1.0, 1.0, 0.94).setStroke();
+        cross.stroke();
+
+        Bool::YES
+    });
+
+    let img = NSImage::imageWithSize_flipped_drawingHandler(size, false, &handler);
+    img.setTemplate(false);
+    img
+}
+
 fn make_label(
     mtm: MainThreadMarker,
     frame: NSRect,
-    font_size: CGFloat,
-    alpha: CGFloat,
+    font: &NSFont,
+    color: &NSColor,
     align: NSTextAlignment,
 ) -> Retained<NSTextField> {
     let label = NSTextField::initWithFrame(mtm.alloc(), frame);
@@ -197,10 +417,8 @@ fn make_label(
     label.setEditable(false);
     label.setSelectable(false);
     label.setAlignment(align);
-    label.setFont(Some(&NSFont::systemFontOfSize(font_size)));
-    label.setTextColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(
-        1.0, 1.0, 1.0, alpha,
-    )));
+    label.setFont(Some(font));
+    label.setTextColor(Some(color));
     label
 }
 
@@ -235,33 +453,32 @@ pub fn init_on_main(mtm: MainThreadMarker, on_cancel: Arc<dyn Fn() + Send + Sync
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
 
-        let blur = NSVisualEffectView::initWithFrame(
-            mtm.alloc(),
-            NSRect::new(
-                NSPoint::new(0.0, 0.0),
-                NSSize::new(COMPACT_WIDTH, COMPACT_HEIGHT),
-            ),
-        );
-        blur.setMaterial(NSVisualEffectMaterial::HUDWindow);
-        blur.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-        blur.setState(NSVisualEffectState::Active);
-        blur.setWantsLayer(true);
-        if let Some(layer) = blur.layer() {
-            layer.setCornerRadius(20.0);
-            layer.setMasksToBounds(true);
-            layer.setBorderWidth(1.0);
-            let border = NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 1.0, 1.0, 0.16);
-            layer.setBorderColor(Some(&border.CGColor()));
+        // Force DarkAqua appearance on the panel so macOS Light Mode never washes out the HUD
+        // or turns the NSProgressIndicator spinner dark-on-dark.
+        let dark_appearance = unsafe { NSAppearance::appearanceNamed(NSAppearanceNameDarkAqua) };
+        if let Some(ref appearance) = dark_appearance {
+            panel.setAppearance(Some(appearance));
         }
 
+        let content_bounds = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(COMPACT_WIDTH, COMPACT_HEIGHT),
+        );
+        let surface = LiviOverlaySurfaceView::new(mtm, content_bounds);
+        if let Some(ref appearance) = dark_appearance {
+            surface.setAppearance(Some(appearance));
+        }
+
+        let mic_font = unsafe { NSFont::systemFontOfSize_weight(11.5, NSFontWeightMedium) };
+        let mic_color = NSColor::colorWithSRGBRed_green_blue_alpha(0.92, 0.95, 1.0, 0.90);
         let mic_label = make_label(
             mtm,
             NSRect::new(
                 NSPoint::new(14.0, 40.0),
                 NSSize::new(COMPACT_WIDTH - 28.0, 16.0),
             ),
-            11.0,
-            0.62,
+            &mic_font,
+            &mic_color,
             NSTextAlignment::Center,
         );
 
@@ -282,14 +499,16 @@ pub fn init_on_main(mtm: MainThreadMarker, on_cancel: Arc<dyn Fn() + Send + Sync
         spinner.setIndeterminate(true);
         spinner.setHidden(true);
 
+        let status_font = unsafe { NSFont::systemFontOfSize_weight(13.0, NSFontWeightSemibold) };
+        let status_color = NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 1.0, 1.0, 0.98);
         let status_label = make_label(
             mtm,
             NSRect::new(
                 NSPoint::new(42.0, 13.0),
                 NSSize::new(COMPACT_WIDTH - 84.0, 18.0),
             ),
-            12.5,
-            0.94,
+            &status_font,
+            &status_color,
             NSTextAlignment::Center,
         );
         status_label.setHidden(true);
@@ -303,25 +522,26 @@ pub fn init_on_main(mtm: MainThreadMarker, on_cancel: Arc<dyn Fn() + Send + Sync
             ),
         );
         cancel_btn.setBordered(false);
-        cancel_btn.setTitle(&NSString::from_str("✕"));
-        cancel_btn.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+        cancel_btn.setTitle(&NSString::from_str(""));
+        cancel_btn.setImage(Some(&build_cancel_icon()));
+        cancel_btn.setImagePosition(NSCellImagePosition::ImageOnly);
         unsafe {
             cancel_btn.setTarget(Some(&action_target));
             cancel_btn.setAction(Some(sel!(onCancelClicked:)));
         }
 
-        blur.addSubview(&mic_label);
-        blur.addSubview(&waveform);
-        blur.addSubview(&spinner);
-        blur.addSubview(&status_label);
-        blur.addSubview(&cancel_btn);
+        surface.addSubview(&mic_label);
+        surface.addSubview(&waveform);
+        surface.addSubview(&spinner);
+        surface.addSubview(&status_label);
+        surface.addSubview(&cancel_btn);
 
-        panel.setContentView(Some(&blur));
+        panel.setContentView(Some(&surface));
         panel.orderOut(None);
 
         *slot.borrow_mut() = Some(OverlayInner {
             panel,
-            blur,
+            surface,
             mic_label,
             waveform,
             spinner,
@@ -371,9 +591,9 @@ fn frame_for_size(
 }
 
 fn layout_subviews(inner: &OverlayInner, w: CGFloat, h: CGFloat) {
-    inner
-        .blur
-        .setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h)));
+    let full = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h));
+    inner.surface.setFrame(full);
+    inner.surface.setNeedsDisplay(true);
 
     if inner.notice_mode {
         inner.mic_label.setHidden(true);
@@ -382,8 +602,8 @@ fn layout_subviews(inner: &OverlayInner, w: CGFloat, h: CGFloat) {
         inner.cancel_btn.setHidden(true);
         inner.status_label.setHidden(false);
         inner.status_label.setFrame(NSRect::new(
-            NSPoint::new(14.0, (h - 18.0) / 2.0),
-            NSSize::new(w - 28.0, 18.0),
+            NSPoint::new(16.0, (h - 18.0) / 2.0),
+            NSSize::new(w - 32.0, 18.0),
         ));
         return;
     }
@@ -416,6 +636,7 @@ fn apply_frame(mtm: MainThreadMarker, inner: &OverlayInner, w: CGFloat, h: CGFlo
     let rect = frame_for_size(mtm, inner.position, w, h);
     inner.panel.setFrame_display(rect, true);
     layout_subviews(inner, w, h);
+    inner.panel.invalidateShadow();
 }
 
 pub fn show_listening(mic_name: String, position: OverlayPosition) {
@@ -429,6 +650,7 @@ pub fn show_listening(mic_name: String, position: OverlayPosition) {
             let Some(inner) = borrow.as_mut() else { return };
             inner.position = position;
             inner.notice_mode = false;
+            inner.surface.set_accent(SurfaceAccent::WarmingUp);
 
             inner
                 .mic_label
@@ -441,7 +663,7 @@ pub fn show_listening(mic_name: String, position: OverlayPosition) {
             inner
                 .status_label
                 .setTextColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(
-                    1.0, 1.0, 1.0, 0.94,
+                    1.0, 1.0, 1.0, 0.98,
                 )));
 
             apply_frame(mtm, inner, COMPACT_WIDTH, COMPACT_HEIGHT);
@@ -454,6 +676,7 @@ pub fn mark_capture_ready() {
     DispatchQueue::main().exec_async(|| {
         OVERLAY.with(|slot| {
             if let Some(inner) = slot.borrow().as_ref() {
+                inner.surface.set_accent(SurfaceAccent::Listening);
                 inner.waveform.set_ready(true);
             }
         });
@@ -481,9 +704,15 @@ pub fn show_polishing() {
             if inner.notice_mode {
                 return;
             }
+            inner.surface.set_accent(SurfaceAccent::Polishing);
             inner.waveform.setHidden(true);
             inner.spinner.setHidden(false);
             unsafe { inner.spinner.startAnimation(None) };
+            inner
+                .status_label
+                .setTextColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(
+                    1.0, 1.0, 1.0, 0.98,
+                )));
             inner
                 .status_label
                 .setStringValue(&NSString::from_str("Polishing…"));
@@ -505,18 +734,19 @@ pub fn show_notice(message: String, kind: NoticeKind, position: OverlayPosition)
             inner.notice_mode = true;
             unsafe { inner.spinner.stopAnimation(None) };
 
-            let prefix = match kind {
-                NoticeKind::Error => "⚠ ",
-                NoticeKind::Warning => "● ",
+            let (prefix, accent, color) = match kind {
+                NoticeKind::Error => (
+                    "⚠ ",
+                    SurfaceAccent::Error,
+                    NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.56, 0.54, 1.0),
+                ),
+                NoticeKind::Warning => (
+                    "● ",
+                    SurfaceAccent::Warning,
+                    NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.86, 0.42, 1.0),
+                ),
             };
-            let color = match kind {
-                NoticeKind::Error => {
-                    NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.56, 0.54, 0.98)
-                }
-                NoticeKind::Warning => {
-                    NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.82, 0.42, 0.98)
-                }
-            };
+            inner.surface.set_accent(accent);
             inner.status_label.setTextColor(Some(&color));
             inner
                 .status_label

@@ -47,13 +47,16 @@ objc2-foundation = { version = "0.3", features = [
 ] }
 objc2-app-kit = { version = "0.3", features = [
     "NSAlert",
+    "NSAppearance",
     "NSApplication",
     "NSBezierPath",
     "NSButton",
+    "NSCell",
     "NSColor",
     "NSControl",
     "NSEvent",
     "NSFont",
+    "NSFontDescriptor",
     "NSGradient",
     "NSGraphics",
     "NSGraphicsContext",
@@ -77,12 +80,10 @@ objc2-app-kit = { version = "0.3", features = [
     "NSTextField",
     "NSTextView",
     "NSView",
-    "NSVisualEffectView",
     "NSWindow",
     "NSWorkspace",
     "block2",
 ] }
-objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
 objc2-core-graphics = { version = "0.3", features = [
     "CGEvent",
     "CGEventTypes",
