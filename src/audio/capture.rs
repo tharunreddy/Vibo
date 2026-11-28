@@ -8,10 +8,43 @@ use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Indexing, Resampler};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+static PENDING_STREAM_DROP: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
+fn join_pending_stream_drop() {
+    let pending = PENDING_STREAM_DROP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    if let Some(handle) = pending {
+        let _ = handle.join();
+    }
+}
+
+fn detach_stream_drop(stream: Stream) {
+    let prev = PENDING_STREAM_DROP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    let handle = thread::Builder::new()
+        .name("vibo-audio-teardown".into())
+        .spawn(move || {
+            if let Some(prev) = prev {
+                let _ = prev.join();
+            }
+            drop(stream);
+        })
+        .ok();
+    if let Some(handle) = handle {
+        *PENDING_STREAM_DROP
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(handle);
+    }
+}
 
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 const RESAMPLER_CHUNK_FRAMES: usize = 512;
@@ -72,11 +105,13 @@ pub struct CaptureSummary {
     pub mic_ready_ms: Option<f64>,
 }
 
-/// Active microphone recording session. Dropping or calling [`stop`] cleanly tears down
-/// the CoreAudio stream and joins the consumer thread after draining remaining frames.
+/// Active microphone recording session. Calling [`stop`] immediately halts sample
+/// acceptance, wakes and joins the consumer thread to flush the resampler in <1 ms,
+/// and tears down the CoreAudio stream asynchronously in the background.
 pub struct ActiveCapture {
     pub device_name: String,
     stream: Option<Stream>,
+    accepting_audio: Arc<AtomicBool>,
     stop_flag: Arc<AtomicBool>,
     consumer_thread: Option<JoinHandle<CaptureSummary>>,
 }
@@ -89,6 +124,9 @@ impl ActiveCapture {
         on_levels: LevelCallback,
         on_ready: ReadyCallback,
     ) -> Result<Self> {
+        // Ensure any prior asynchronous CoreAudio stream teardown has finished before opening.
+        join_pending_stream_drop();
+
         let (device, device_name) = select_input_device(preferred_mic)?;
         let supported = device
             .default_input_config()
@@ -111,6 +149,9 @@ impl ActiveCapture {
         let ring_capacity = (input_rate as usize * 2).max(16_384);
         let (producer, consumer) = RingBuffer::<f32>::new(ring_capacity);
 
+        let accepting_audio = Arc::new(AtomicBool::new(true));
+        let accepting_cb = Arc::clone(&accepting_audio);
+
         let stream_failed = Arc::new(AtomicBool::new(false));
         let stream_failed_cb = Arc::clone(&stream_failed);
         let err_fn = move |err| {
@@ -123,7 +164,11 @@ impl ActiveCapture {
                 let mut prod = producer;
                 device.build_input_stream(
                     stream_config,
-                    move |data: &[f32], _| push_mono_f32(&mut prod, data, channels),
+                    move |data: &[f32], _| {
+                        if accepting_cb.load(Ordering::Acquire) {
+                            push_mono_f32(&mut prod, data, channels);
+                        }
+                    },
                     err_fn,
                     None,
                 )
@@ -132,7 +177,11 @@ impl ActiveCapture {
                 let mut prod = producer;
                 device.build_input_stream(
                     stream_config,
-                    move |data: &[i16], _| push_mono_i16(&mut prod, data, channels),
+                    move |data: &[i16], _| {
+                        if accepting_cb.load(Ordering::Acquire) {
+                            push_mono_i16(&mut prod, data, channels);
+                        }
+                    },
                     err_fn,
                     None,
                 )
@@ -141,7 +190,11 @@ impl ActiveCapture {
                 let mut prod = producer;
                 device.build_input_stream(
                     stream_config,
-                    move |data: &[u16], _| push_mono_u16(&mut prod, data, channels),
+                    move |data: &[u16], _| {
+                        if accepting_cb.load(Ordering::Acquire) {
+                            push_mono_u16(&mut prod, data, channels);
+                        }
+                    },
                     err_fn,
                     None,
                 )
@@ -168,32 +221,48 @@ impl ActiveCapture {
         Ok(Self {
             device_name,
             stream: Some(stream),
+            accepting_audio,
             stop_flag,
             consumer_thread: Some(consumer_thread),
         })
     }
 
-    pub fn stop(mut self) -> CaptureSummary {
-        // Drop CoreAudio stream first so no new frames arrive, then signal consumer to drain.
-        drop(self.stream.take());
+    /// Immediately stops accepting new CoreAudio frames and unparks the consumer thread so
+    /// it drains buffered audio and flushes the resampler without waiting on HAL teardown.
+    pub fn signal_stop(&self) {
+        self.accepting_audio.store(false, Ordering::Release);
         self.stop_flag.store(true, Ordering::Release);
-        self.consumer_thread
+        if let Some(handle) = self.consumer_thread.as_ref() {
+            handle.thread().unpark();
+        }
+    }
+
+    pub fn stop(mut self) -> CaptureSummary {
+        self.signal_stop();
+        let summary = self
+            .consumer_thread
             .take()
             .and_then(|h| h.join().ok())
             .unwrap_or(CaptureSummary {
                 samples_16k: 0,
                 input_silent: false,
                 mic_ready_ms: None,
-            })
+            });
+        if let Some(stream) = self.stream.take() {
+            detach_stream_drop(stream);
+        }
+        summary
     }
 }
 
 impl Drop for ActiveCapture {
     fn drop(&mut self) {
-        drop(self.stream.take());
-        self.stop_flag.store(true, Ordering::Release);
+        self.signal_stop();
         if let Some(h) = self.consumer_thread.take() {
             let _ = h.join();
+        }
+        if let Some(stream) = self.stream.take() {
+            detach_stream_drop(stream);
         }
     }
 }
@@ -418,7 +487,7 @@ fn run_consumer(
         } else if stop_flag.load(Ordering::Acquire) {
             break;
         } else {
-            thread::sleep(Duration::from_millis(5));
+            thread::park_timeout(Duration::from_millis(5));
         }
     }
 

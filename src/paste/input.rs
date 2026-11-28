@@ -4,6 +4,8 @@
 use objc2_core_graphics::{
     CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
 };
+use objc2_foundation::NSString;
+use std::cell::RefCell;
 use std::ffi::c_void;
 
 // kVK_ANSI_V fallback if Carbon TIS cannot expose the active layout.
@@ -27,6 +29,7 @@ unsafe extern "C" {
         property_key: CfStringRef,
     ) -> CfDataRef;
     static kTISPropertyUnicodeKeyLayoutData: CfStringRef;
+    static kTISPropertyInputSourceID: CfStringRef;
     fn UCKeyTranslate(
         key_layout: *const u8,
         virtual_key_code: u16,
@@ -58,12 +61,34 @@ impl Drop for InputSource {
     }
 }
 
-/// Resolves the physical virtual keycode that macOS interprets as `v` while Command is held.
+thread_local! {
+    static CACHED_CMD_V: RefCell<Option<(String, u16)>> = const { RefCell::new(None) };
+}
+
+/// Resolves the physical virtual keycode that macOS interprets as `v` while Command is held,
+/// caching the lookup by active Carbon TIS keyboard layout ID.
 /// Must be called on the macOS main thread.
 fn resolve_command_v_keycode() -> u16 {
     let source = InputSource(unsafe { TISCopyCurrentKeyboardLayoutInputSource() });
     if source.0.is_null() {
         return ANSI_V_KEYCODE;
+    }
+    let source_id = unsafe {
+        let id_ref = TISGetInputSourceProperty(source.0, kTISPropertyInputSourceID);
+        if id_ref.is_null() {
+            None
+        } else {
+            Some((*(id_ref as *const NSString)).to_string())
+        }
+    };
+    if let Some(ref id) = source_id
+        && let Some(cached) = CACHED_CMD_V.with(|c| {
+            c.borrow()
+                .as_ref()
+                .and_then(|(k, v)| (k == id).then_some(*v))
+        })
+    {
+        return cached;
     }
     let layout_data =
         unsafe { TISGetInputSourceProperty(source.0, kTISPropertyUnicodeKeyLayoutData) };
@@ -75,6 +100,7 @@ fn resolve_command_v_keycode() -> u16 {
         return ANSI_V_KEYCODE;
     }
     let keyboard_type = unsafe { LMGetKbdType() } as u32;
+    let mut resolved = ANSI_V_KEYCODE;
     for keycode in 0..KEYCODE_COUNT {
         let mut dead_key_state = 0;
         let mut chars = [0_u16; 4];
@@ -94,10 +120,16 @@ fn resolve_command_v_keycode() -> u16 {
             )
         };
         if status == 0 && length == 1 && chars[0] == u16::from(b'v') {
-            return keycode;
+            resolved = keycode;
+            break;
         }
     }
-    ANSI_V_KEYCODE
+    if let Some(id) = source_id {
+        CACHED_CMD_V.with(|c| {
+            *c.borrow_mut() = Some((id, resolved));
+        });
+    }
+    resolved
 }
 
 /// Token representing a currently held Command modifier to be released after `CHORD_HOLD_MS`.

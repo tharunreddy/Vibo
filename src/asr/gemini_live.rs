@@ -5,7 +5,7 @@
 //! - Optional `languageCodes` (omitted when empty for automatic 85+ language detection)
 //! - Up to 1,000 `customVocabulary` biasing terms
 //! - Manual VAD (`activityStart` → 100–200 ms coalesced PCM16LE frames → `activityEnd`)
-//! - Pre-warmed 4-minute `StandbyPool` with 25s pings & instant claim (`standby_hit`)
+//! - Pre-warmed `StandbyPool` with 45s overlapped TTL rotation, 20s pings, peer-close recovery & instant claim (`standby_hit`)
 
 use crate::asr::ws_session::{
     CONNECTION_TIMEOUT, ConnectError, ConnectedSession, ProtocolEvent, Socket, VerifiedConnection,
@@ -42,10 +42,15 @@ const GEMINI_MAX_AUDIO_FRAME_BYTES: usize = 6_400;
 const GEMINI_MAX_COALESCE_WAIT: Duration = Duration::from_millis(120);
 const GEMINI_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
-const STANDBY_SOCKET_TTL: Duration = Duration::from_secs(4 * 60);
+/// Gemini Live closes idle pre-activity sockets at ~60s regardless of WebSocket Pings.
+/// Rotate proactively at 45s (with overlap) and never hand out a socket past 54s so we
+/// stay strictly clear of the 60s server cliff (`code 1008`).
+const STANDBY_SOCKET_TTL: Duration = Duration::from_secs(45);
+const STANDBY_MAX_CLAIM_AGE: Duration = Duration::from_secs(54);
 const STANDBY_ACTIVE_WINDOW: Duration = Duration::from_secs(15 * 60);
-const STANDBY_PING_INTERVAL: Duration = Duration::from_secs(25);
+const STANDBY_PING_INTERVAL: Duration = Duration::from_secs(20);
 const STANDBY_MIN_ROTATE_AGE: Duration = Duration::from_secs(5);
+const STANDBY_ROTATE_BACKOFF: Duration = Duration::from_secs(1);
 const STANDBY_ACTIVITY_START_TIMEOUT: Duration = Duration::from_secs(2);
 const PCM_MIME_TYPE: &str = "audio/pcm;rate=16000";
 
@@ -643,18 +648,22 @@ impl StandbyKey {
 #[derive(Clone, Copy, Debug)]
 struct StandbyTimings {
     socket_ttl: Duration,
+    max_claim_age: Duration,
     active_window: Duration,
     ping_interval: Duration,
     min_rotate_age: Duration,
+    rotate_backoff: Duration,
 }
 
 impl Default for StandbyTimings {
     fn default() -> Self {
         Self {
             socket_ttl: STANDBY_SOCKET_TTL,
+            max_claim_age: STANDBY_MAX_CLAIM_AGE,
             active_window: STANDBY_ACTIVE_WINDOW,
             ping_interval: STANDBY_PING_INTERVAL,
             min_rotate_age: STANDBY_MIN_ROTATE_AGE,
+            rotate_backoff: STANDBY_ROTATE_BACKOFF,
         }
     }
 }
@@ -798,6 +807,19 @@ async fn close_socket_gracefully(socket: &mut Socket) {
     .await;
 }
 
+enum StandbyRotation {
+    Overlap(Box<Socket>, Instant),
+    ReconnectAfterBackoff,
+    ReconnectNow,
+    Stop,
+}
+
+fn spawn_graceful_close(mut socket: Socket) {
+    tokio::spawn(async move {
+        close_socket_gracefully(&mut socket).await;
+    });
+}
+
 async fn run_standby_keeper(
     pool: Arc<StandbyPool>,
     id: u64,
@@ -806,6 +828,8 @@ async fn run_standby_keeper(
     warm_until: Arc<Mutex<Instant>>,
     timings: StandbyTimings,
 ) {
+    let mut overlap: Option<(Socket, Instant)> = None;
+
     loop {
         let connect_start = Instant::now();
         let connect_fut = connect_and_setup(&key.endpoint, &key.secret, &key.config, false);
@@ -814,21 +838,64 @@ async fn run_standby_keeper(
 
         let socket_result = loop {
             tokio::select! {
-                result = &mut connect_fut => break result,
+                biased;
                 cmd = cmd_rx.recv(), if pending_claim.is_none() => match cmd {
                     Some(StandbyCommand::Claim(reply_tx)) => {
+                        if let Some((old_sock, old_est)) = overlap.take() {
+                            if old_est.elapsed() < timings.max_claim_age {
+                                pool.remove_if_id(id);
+                                if let Err(Some(mut unclaimed)) = reply_tx.send(Some(old_sock)) {
+                                    close_socket_gracefully(&mut unclaimed).await;
+                                }
+                                return;
+                            }
+                            spawn_graceful_close(old_sock);
+                        }
                         pending_claim = Some(reply_tx);
                     }
                     Some(StandbyCommand::Close) | None => {
                         pool.remove_if_id(id);
+                        if let Some((mut old_sock, _)) = overlap.take() {
+                            close_socket_gracefully(&mut old_sock).await;
+                        }
                         return;
                     }
-                }
+                },
+                result = &mut connect_fut => break result,
+                msg = async {
+                    match overlap.as_mut() {
+                        Some((sock, _)) => sock.next().await,
+                        None => std::future::pending().await,
+                    }
+                }, if overlap.is_some() => match msg {
+                    Some(Ok(Message::Ping(data))) => {
+                        if let Some((sock, _)) = overlap.as_mut()
+                            && !matches!(
+                                tokio::time::timeout(
+                                    Duration::from_secs(5),
+                                    sock.send(Message::Pong(data)),
+                                )
+                                .await,
+                                Ok(Ok(()))
+                            )
+                        {
+                            overlap = None;
+                        }
+                    }
+                    Some(Ok(Message::Pong(_))) => {}
+                    _ => {
+                        // Overlapping socket closed/errored; keep waiting for fresh replacement.
+                        overlap = None;
+                    }
+                },
             }
         };
 
         let mut socket = match socket_result {
             Ok(socket) => {
+                if let Some((old_sock, _)) = overlap.take() {
+                    spawn_graceful_close(old_sock);
+                }
                 VERIFIED_CONNECTION.record(&key.endpoint, &key.secret, true);
                 tracing::debug!(
                     elapsed_ms = connect_start.elapsed().as_millis() as u64,
@@ -841,6 +908,9 @@ async fn run_standby_keeper(
                     error = %redact(error, &key.secret),
                     "Gemini Live standby warmup failed"
                 );
+                if let Some((old_sock, _)) = overlap.take() {
+                    spawn_graceful_close(old_sock);
+                }
                 if let Some(reply_tx) = pending_claim {
                     let _ = reply_tx.send(None);
                 }
@@ -863,14 +933,19 @@ async fn run_standby_keeper(
         ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ping_interval.tick().await;
 
-        let should_rotate = loop {
+        let rotation = loop {
             tokio::select! {
                 biased;
                 cmd = cmd_rx.recv() => match cmd {
                     Some(StandbyCommand::Claim(reply_tx)) => {
                         pool.remove_if_id(id);
-                        if let Err(Some(mut unclaimed)) = reply_tx.send(Some(socket)) {
-                            close_socket_gracefully(&mut unclaimed).await;
+                        if established_at.elapsed() < timings.max_claim_age {
+                            if let Err(Some(mut unclaimed)) = reply_tx.send(Some(socket)) {
+                                close_socket_gracefully(&mut unclaimed).await;
+                            }
+                        } else {
+                            let _ = reply_tx.send(None);
+                            spawn_graceful_close(socket);
                         }
                         return;
                     }
@@ -888,8 +963,11 @@ async fn run_standby_keeper(
                         )
                         .await;
                         if !matches!(pong, Ok(Ok(()))) {
-                            pool.remove_if_id(id);
-                            return;
+                            break if established_at.elapsed() >= timings.min_rotate_age {
+                                StandbyRotation::ReconnectAfterBackoff
+                            } else {
+                                StandbyRotation::Stop
+                            };
                         }
                     }
                     Some(Ok(Message::Pong(_))) => {}
@@ -911,14 +989,24 @@ async fn run_standby_keeper(
                             if payload.get("goAway").is_some_and(|v| !v.is_null()) {
                                 tracing::debug!("Gemini Live standby received goAway");
                                 close_socket_gracefully(&mut socket).await;
-                                break established_at.elapsed() >= timings.min_rotate_age;
+                                break if established_at.elapsed() >= timings.min_rotate_age {
+                                    StandbyRotation::ReconnectNow
+                                } else {
+                                    StandbyRotation::Stop
+                                };
                             }
                         }
                     }
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
-                        tracing::debug!("Gemini Live standby closed by peer");
-                        pool.remove_if_id(id);
-                        return;
+                        tracing::debug!(
+                            age_ms = established_at.elapsed().as_millis() as u64,
+                            "Gemini Live standby closed by peer"
+                        );
+                        break if established_at.elapsed() >= timings.min_rotate_age {
+                            StandbyRotation::ReconnectAfterBackoff
+                        } else {
+                            StandbyRotation::Stop
+                        };
                     }
                     _ => {}
                 },
@@ -932,24 +1020,65 @@ async fn run_standby_keeper(
                         Ok(Ok(()))
                     ) {
                         tracing::debug!("Gemini Live standby ping failed");
-                        pool.remove_if_id(id);
-                        return;
+                        break if established_at.elapsed() >= timings.min_rotate_age {
+                            StandbyRotation::ReconnectAfterBackoff
+                        } else {
+                            StandbyRotation::Stop
+                        };
                     }
                 },
                 _ = tokio::time::sleep_until(expires_at) => {
-                    tracing::debug!("Gemini Live standby reached TTL; rotating");
+                    let still_active =
+                        Instant::now() < *warm_until.lock().unwrap_or_else(|e| e.into_inner());
+                    if still_active {
+                        tracing::debug!("Gemini Live standby reached TTL; rotating with overlap");
+                        break StandbyRotation::Overlap(Box::new(socket), established_at);
+                    }
+                    tracing::debug!("Gemini Live standby active window elapsed; going cold");
                     close_socket_gracefully(&mut socket).await;
-                    break true;
+                    pool.remove_if_id(id);
+                    return;
                 },
             }
         };
 
-        let still_active =
-            should_rotate && Instant::now() < *warm_until.lock().unwrap_or_else(|e| e.into_inner());
-        if !still_active {
-            tracing::debug!("Gemini Live standby active window elapsed; going cold");
-            pool.remove_if_id(id);
-            return;
+        let still_active = Instant::now() < *warm_until.lock().unwrap_or_else(|e| e.into_inner());
+        match rotation {
+            StandbyRotation::Overlap(old_sock, old_est) if still_active => {
+                overlap = Some((*old_sock, old_est));
+            }
+            StandbyRotation::Overlap(old_sock, _) => {
+                spawn_graceful_close(*old_sock);
+                pool.remove_if_id(id);
+                return;
+            }
+            StandbyRotation::ReconnectNow if still_active => {}
+            StandbyRotation::ReconnectAfterBackoff if still_active => {
+                if !timings.rotate_backoff.is_zero() {
+                    let sleep = tokio::time::sleep(timings.rotate_backoff);
+                    tokio::pin!(sleep);
+                    tokio::select! {
+                        biased;
+                        cmd = cmd_rx.recv() => match cmd {
+                            Some(StandbyCommand::Claim(reply_tx)) => {
+                                pool.remove_if_id(id);
+                                let _ = reply_tx.send(None);
+                                return;
+                            }
+                            Some(StandbyCommand::Close) | None => {
+                                pool.remove_if_id(id);
+                                return;
+                            }
+                        },
+                        _ = &mut sleep => {}
+                    }
+                }
+            }
+            _ => {
+                tracing::debug!("Gemini Live standby stopped rotating; going cold");
+                pool.remove_if_id(id);
+                return;
+            }
         }
     }
 }
@@ -1163,7 +1292,7 @@ mod tests {
 
         session.feed_pcm(&vec![0.1_f32; 2000]).unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let result = session.finish().await.unwrap();
+        let result = session.finish(Instant::now()).await.unwrap();
         server_task.await.unwrap();
 
         assert_eq!(result.text, "Hello.");
@@ -1219,10 +1348,112 @@ mod tests {
             .unwrap(),
         );
         session.feed_pcm(&vec![0.05_f32; 1600]).unwrap();
-        let result = session.finish().await.unwrap();
+        let result = session.finish(Instant::now()).await.unwrap();
         server_task.await.unwrap();
 
         assert_eq!(result.text, "Warm hit!");
+        assert!(result.timings.standby_hit);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::result_large_err)]
+    async fn standby_pool_rotates_on_ttl_and_recovers_from_peer_close() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let server_task = tokio::spawn(async move {
+            // Connection 1: server closes it cleanly after 25ms (simulating Gemini 60s idle timeout).
+            let (s1, _) = listener.accept().await.unwrap();
+            let mut ws1 = accept_hdr_async(s1, |_: &Request, resp: Response| Ok(resp))
+                .await
+                .unwrap();
+            let _ = ws1.next().await;
+            ws1.send(Message::Text(
+                json!({"setupComplete": {}}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            let _ = ws1
+                .send(Message::Close(Some(CloseFrame {
+                    code: CloseCode::Normal,
+                    reason: "idle".into(),
+                })))
+                .await;
+
+            // Connection 2: held past TTL (60ms) so keeper proactively rotates with overlap.
+            let (s2, _) = listener.accept().await.unwrap();
+            let mut ws2 = accept_hdr_async(s2, |_: &Request, resp: Response| Ok(resp))
+                .await
+                .unwrap();
+            let _ = ws2.next().await;
+            ws2.send(Message::Text(
+                json!({"setupComplete": {}}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+
+            // Connection 3: fresh overlapped replacement that should be claimed warmly.
+            let (s3, _) = listener.accept().await.unwrap();
+            let mut ws3 = accept_hdr_async(s3, |_: &Request, resp: Response| Ok(resp))
+                .await
+                .unwrap();
+            let _ = ws3.next().await;
+            ws3.send(Message::Text(
+                json!({"setupComplete": {}}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+            let start = ws3.next().await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(start.to_text().unwrap()).unwrap(),
+                json!({"realtimeInput": {"activityStart": {}}})
+            );
+            while let Some(Ok(Message::Text(text))) = ws3.next().await {
+                let val: Value = serde_json::from_str(&text).unwrap();
+                if val["realtimeInput"].get("activityEnd").is_some() {
+                    break;
+                }
+            }
+            ws3.send(Message::Text(
+                json!({"serverContent": {"inputTranscription": {"text": "Rotated warm!"}}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        });
+
+        let pool = Arc::new(StandbyPool::new());
+        let cfg = GeminiSessionConfig::default();
+        let fast_timings = StandbyTimings {
+            socket_ttl: Duration::from_millis(60),
+            max_claim_age: Duration::from_millis(120),
+            active_window: Duration::from_secs(5),
+            ping_interval: Duration::from_secs(10),
+            min_rotate_age: Duration::from_millis(10),
+            rotate_backoff: Duration::from_millis(5),
+        };
+        pool.warm(StandbyKey::new(&endpoint, "test-key", &cfg), fast_timings);
+
+        // Wait for conn 1 peer close -> conn 2 -> TTL overlap rotation -> conn 3 ready.
+        tokio::time::sleep(Duration::from_millis(160)).await;
+
+        let session = Box::new(
+            start_session_with_pool(
+                Arc::clone(&pool),
+                &endpoint,
+                "test-key",
+                &cfg,
+                Arc::new(|_| {}),
+                Arc::new(|_| {}),
+            )
+            .unwrap(),
+        );
+        session.feed_pcm(&vec![0.05_f32; 1600]).unwrap();
+        let result = session.finish(Instant::now()).await.unwrap();
+        server_task.await.unwrap();
+
+        assert_eq!(result.text, "Rotated warm!");
         assert!(result.timings.standby_hit);
     }
 }

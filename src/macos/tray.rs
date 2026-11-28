@@ -66,6 +66,7 @@ pub struct TraySnapshot {
 struct MenuTargetIvars {
     on_action: Arc<dyn Fn(TrayAction) + Send + Sync>,
     mic_names: RefCell<Vec<String>>,
+    selected_mic: RefCell<Option<String>>,
 }
 
 const TAG_CANCEL: isize = 1;
@@ -89,6 +90,7 @@ const TAG_TOGGLE_LOGIN: isize = 19;
 const TAG_TOGGLE_TRAILING_SPACE: isize = 25;
 const TAG_CUSTOM_VOCAB: isize = 26;
 const TAG_WORD_STATS: isize = 27;
+const TAG_MIC_SUBMENU: isize = 28;
 const TAG_API_KEY: isize = 20;
 const TAG_PERMISSIONS: isize = 21;
 const TAG_OPEN_SETTINGS: isize = 22;
@@ -111,6 +113,15 @@ define_class!(
             if let Some(item) = menu.itemWithTag(TAG_WORD_STATS) {
                 let label = telemetry::word_stats().menu_label();
                 item.setTitle(&NSString::from_str(&label));
+            }
+            if let Some(mic_root) = menu.itemWithTag(TAG_MIC_SUBMENU)
+                && let Some(mtm) = MainThreadMarker::new()
+            {
+                let devices = capture::list_input_devices();
+                *self.ivars().mic_names.borrow_mut() = devices.clone();
+                let selected = self.ivars().selected_mic.borrow().clone();
+                let mic_menu = build_mic_submenu(mtm, self, selected.as_deref(), &devices);
+                mic_root.setSubmenu(Some(&mic_menu));
             }
         }
     }
@@ -175,6 +186,7 @@ impl ViboMenuTarget {
         let this = mtm.alloc::<Self>().set_ivars(MenuTargetIvars {
             on_action,
             mic_names: RefCell::new(Vec::new()),
+            selected_mic: RefCell::new(None),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -235,6 +247,41 @@ fn make_header(mtm: MainThreadMarker, title: &str) -> Retained<NSMenuItem> {
     };
     item.setEnabled(false);
     item
+}
+
+fn build_mic_submenu(
+    mtm: MainThreadMarker,
+    t: &ViboMenuTarget,
+    selected_mic: Option<&str>,
+    devices: &[String],
+) -> Retained<NSMenu> {
+    let mic_menu = NSMenu::new(mtm);
+    mic_menu.setAutoenablesItems(false);
+    mic_menu.addItem(&make_item(
+        mtm,
+        "System Default",
+        "",
+        TAG_MIC_DEFAULT,
+        t,
+        true,
+        selected_mic.is_none(),
+    ));
+    if !devices.is_empty() {
+        mic_menu.addItem(&NSMenuItem::separatorItem(mtm));
+        for (idx, name) in devices.iter().enumerate() {
+            let checked = selected_mic == Some(name.as_str());
+            mic_menu.addItem(&make_item(
+                mtm,
+                name,
+                "",
+                TAG_MIC_BASE + idx as isize,
+                t,
+                true,
+                checked,
+            ));
+        }
+    }
+    mic_menu
 }
 
 const STATUS_ICON_WIDTH: f64 = 22.0;
@@ -540,39 +587,11 @@ fn rebuild_menu(mtm: MainThreadMarker, inner: &TrayInner, snap: &TraySnapshot) {
         false,
     ));
 
-    // Microphone submenu
-    let mic_menu = NSMenu::new(mtm);
-    mic_menu.setAutoenablesItems(false);
-    mic_menu.addItem(&make_item(
-        mtm,
-        "System Default",
-        "",
-        TAG_MIC_DEFAULT,
-        t,
-        true,
-        s.microphone.is_none(),
-    ));
-    let devices = if snap.icon_state == TrayIconState::Idle {
-        capture::list_input_devices()
-    } else {
-        t.ivars().mic_names.borrow().clone()
-    };
-    *t.ivars().mic_names.borrow_mut() = devices.clone();
-    if !devices.is_empty() {
-        mic_menu.addItem(&NSMenuItem::separatorItem(mtm));
-        for (idx, name) in devices.iter().enumerate() {
-            let checked = s.microphone.as_deref() == Some(name.as_str());
-            mic_menu.addItem(&make_item(
-                mtm,
-                name,
-                "",
-                TAG_MIC_BASE + idx as isize,
-                t,
-                true,
-                checked,
-            ));
-        }
-    }
+    // Microphone submenu (device list is refreshed lazily in menuWillOpen: to avoid
+    // synchronous CoreAudio HAL enumeration on every dictation state transition).
+    *t.ivars().selected_mic.borrow_mut() = s.microphone.clone();
+    let cached_devices = t.ivars().mic_names.borrow().clone();
+    let mic_menu = build_mic_submenu(mtm, t, s.microphone.as_deref(), &cached_devices);
     let mic_root = make_header(
         mtm,
         &format!(
@@ -580,6 +599,7 @@ fn rebuild_menu(mtm: MainThreadMarker, inner: &TrayInner, snap: &TraySnapshot) {
             s.microphone.as_deref().unwrap_or("Default")
         ),
     );
+    mic_root.setTag(TAG_MIC_SUBMENU);
     mic_root.setEnabled(true);
     mic_root.setSubmenu(Some(&mic_menu));
     menu.addItem(&mic_root);

@@ -89,6 +89,13 @@ pub(crate) fn evaluate(state: &TxState, now: Instant) -> WaitDecision {
     WaitDecision::KeepWaiting
 }
 
+/// Pre-snapshots the current clipboard asynchronously on the macOS main thread so
+/// heavy clipboard items (e.g. PNG/TIFF screenshots or lazy promises) are materialized
+/// while waiting for ASR finalization rather than on the paste critical path.
+pub fn presnapshot_clipboard_async() {
+    macos::presnapshot_clipboard_async();
+}
+
 /// Pastes `text` at the current cursor position on the macOS main thread.
 /// Must be called from any thread; dispatches to main queue and waits until the
 /// `Cmd+V` chord has been posted (clipboard restoration finishes asynchronously).

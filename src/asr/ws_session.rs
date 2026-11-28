@@ -255,10 +255,16 @@ impl WsStreamSession {
         }
     }
 
-    pub async fn finish_with_timeout(mut self, timeout: Duration) -> Result<AsrResult, String> {
+    pub async fn finish_with_timeout(
+        mut self,
+        stop_requested_at: Instant,
+        timeout: Duration,
+    ) -> Result<AsrResult, String> {
         let _ = self
             .tx
-            .send(StreamCommand::Finish(tokio::time::Instant::now()));
+            .send(StreamCommand::Finish(tokio::time::Instant::from_std(
+                stop_requested_at,
+            )));
         let finished = tokio::time::timeout(timeout, async {
             tokio::select! {
                 biased;
@@ -300,8 +306,14 @@ impl AsrSession for WsStreamSession {
             .map_err(|_| format!("{} stream is no longer accepting audio", self.name))
     }
 
-    fn finish(self: Box<Self>) -> Pin<Box<dyn Future<Output = Result<AsrResult, String>> + Send>> {
-        Box::pin(async move { self.finish_with_timeout(FINALIZE_TIMEOUT).await })
+    fn finish(
+        self: Box<Self>,
+        stop_requested_at: Instant,
+    ) -> Pin<Box<dyn Future<Output = Result<AsrResult, String>> + Send>> {
+        Box::pin(async move {
+            self.finish_with_timeout(stop_requested_at, FINALIZE_TIMEOUT)
+                .await
+        })
     }
 
     fn cancel(self: Box<Self>) {

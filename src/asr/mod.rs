@@ -40,7 +40,10 @@ pub trait AsrSession: Send {
     /// Feeds 16 kHz mono f32 samples (-1.0..=1.0) into the session.
     fn feed_pcm(&self, samples: &[f32]) -> Result<(), String>;
     /// Flushes remaining audio and awaits the final transcript and latency timings.
-    fn finish(self: Box<Self>) -> Pin<Box<dyn Future<Output = Result<AsrResult, String>> + Send>>;
+    fn finish(
+        self: Box<Self>,
+        stop_requested_at: std::time::Instant,
+    ) -> Pin<Box<dyn Future<Output = Result<AsrResult, String>> + Send>>;
     /// Aborts immediately and suppresses any subsequent callbacks.
     fn cancel(self: Box<Self>);
 }

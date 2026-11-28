@@ -138,8 +138,44 @@ struct MacPending {
 // macOS main thread via `DispatchQueue::main()`. Background threads only read `settled` / `state`.
 unsafe impl Send for MacPending {}
 
+struct PreSnapshot {
+    change_count: NSInteger,
+    saved: SavedClipboard,
+}
+
 static PENDING: Mutex<Option<Arc<Mutex<MacPending>>>> = Mutex::new(None);
+static PRE_SNAPSHOT: Mutex<Option<PreSnapshot>> = Mutex::new(None);
 static PASTE_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn presnapshot_clipboard_async() {
+    DispatchQueue::main().exec_async(|| {
+        // Never snapshot our own transient promised transcript if a prior paste is still settling.
+        let has_active_pending = PENDING
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|p| p.lock().is_ok_and(|g| !g.settled)))
+            .unwrap_or(false);
+        if has_active_pending {
+            return;
+        }
+        let cc = NSPasteboard::generalPasteboard().changeCount();
+        let already_cached = PRE_SNAPSHOT
+            .lock()
+            .ok()
+            .is_some_and(|slot| slot.as_ref().is_some_and(|s| s.change_count == cc));
+        if already_cached {
+            return;
+        }
+        let saved = snapshot_clipboard();
+        let after_cc = NSPasteboard::generalPasteboard().changeCount();
+        if after_cc == cc {
+            *PRE_SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner()) = Some(PreSnapshot {
+                change_count: cc,
+                saved,
+            });
+        }
+    });
+}
 
 fn settle_on_main(pending: &Arc<Mutex<MacPending>>) {
     let mut p = match pending.lock() {
@@ -229,15 +265,24 @@ fn spawn_waiter(pending: Arc<Mutex<MacPending>>) {
 fn run_on_main(text: &str, preserve_clipboard: bool) -> Result<(), String> {
     flush_pending_on_main();
 
+    let pasteboard = NSPasteboard::generalPasteboard();
     let saved = if preserve_clipboard {
-        snapshot_clipboard()
+        let current_cc = pasteboard.changeCount();
+        let cached = PRE_SNAPSHOT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        match cached {
+            Some(pre) if pre.change_count == current_cc => pre.saved,
+            _ => snapshot_clipboard(),
+        }
     } else {
+        *PRE_SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner()) = None;
         SavedClipboard::Empty
     };
 
     let state = Arc::new(Mutex::new(TxState::new()));
     let provider = ViboPasteProvider::new(Arc::clone(&state), text.to_string());
-    let pasteboard = NSPasteboard::generalPasteboard();
 
     let mut types: Vec<Retained<NSString>> = Vec::with_capacity(1 + CONCEALMENT_TYPES.len());
     types.push(NSString::from_str("public.utf8-plain-text"));

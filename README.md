@@ -18,7 +18,7 @@ Designed from the ground up to stay fast and out of your way:
 
 ## Features
 
-- **Low-Latency Streaming Transcription** — Connects to `gemini-3.5-transcribe-live` over bidirectional WebSockets with manual VAD (`activityStart` / `activityEnd`) and a pre-warmed **Standby Pool** (4-minute socket TTL with 25 s keepalive pings) for near-instant dictation start.
+- **Low-Latency Streaming Transcription** — Connects to `gemini-3.5-transcribe-live` over bidirectional WebSockets with manual VAD (`activityStart` / `activityEnd`) and a pre-warmed **Standby Pool** (45 s overlapped socket rotation with 20 s keepalive pings) for near-instant dictation start.
 - **Smart Mode & Verbatim Mode** — Defaults to Gemini **Smart Mode** for clean, punctuated, self-corrected output; switch to **Verbatim** anytime from the menu bar.
 - **Custom Vocabulary & 85+ Languages** — Add up to 1,000 custom vocabulary phrases via the native menu bar dialog for recognition biasing. Automatic multilingual detection & code-switching works out of the box, with optional BCP-47 language hints in `settings.json`.
 - **Native macOS UI (Zero WebView)** —

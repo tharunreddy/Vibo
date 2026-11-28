@@ -43,6 +43,7 @@ pub struct AppController {
     settings: Mutex<Settings>,
     state: Mutex<State>,
     hotkeys: Mutex<Option<HotkeyService>>,
+    monitor_notify: tokio::sync::Notify,
 }
 
 impl AppController {
@@ -52,6 +53,7 @@ impl AppController {
             settings: Mutex::new(initial_settings),
             state: Mutex::new(State::default()),
             hotkeys: Mutex::new(None),
+            monitor_notify: tokio::sync::Notify::new(),
         })
     }
 
@@ -135,36 +137,57 @@ impl AppController {
     fn start_background_monitors(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
         self.rt.spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(2));
             loop {
-                interval.tick().await;
                 let Some(ctrl) = weak.upgrade() else { break };
 
-                // Auto-start hotkeys the moment the user grants Accessibility.
-                if ctrl
+                let needs_accessibility_poll = ctrl
                     .hotkeys
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .is_none()
-                    && permissions::check_accessibility()
-                {
+                    .is_none();
+                let s = ctrl.settings_snapshot();
+                let needs_secure_input_poll = !hotkeys::is_modifier_only_shortcut(&s.shortcut);
+
+                // When Accessibility is already granted and the shortcut is modifier-only
+                // (immune to Secure Input), park with zero periodic wakeups until notified.
+                if !needs_accessibility_poll && !needs_secure_input_poll {
+                    let cleared = {
+                        let mut st = ctrl.state.lock().unwrap_or_else(|e| e.into_inner());
+                        std::mem::replace(&mut st.secure_input_active, false)
+                    };
+                    if cleared {
+                        ctrl.refresh_tray();
+                    }
+                    ctrl.monitor_notify.notified().await;
+                    continue;
+                }
+
+                // Auto-start hotkeys the moment the user grants Accessibility.
+                if needs_accessibility_poll && permissions::check_accessibility() {
                     ctrl.try_init_hotkeys();
                     ctrl.refresh_tray();
                 }
 
                 // Monitor Secure Input for keyed shortcuts.
-                let sec = secure_input::is_secure_input_enabled();
-                let changed = {
-                    let mut st = ctrl.state.lock().unwrap_or_else(|e| e.into_inner());
-                    if st.secure_input_active != sec {
-                        st.secure_input_active = sec;
-                        true
-                    } else {
-                        false
+                if needs_secure_input_poll {
+                    let sec = secure_input::is_secure_input_enabled();
+                    let changed = {
+                        let mut st = ctrl.state.lock().unwrap_or_else(|e| e.into_inner());
+                        if st.secure_input_active != sec {
+                            st.secure_input_active = sec;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if changed {
+                        ctrl.refresh_tray();
                     }
-                };
-                if changed {
-                    ctrl.refresh_tray();
+                }
+
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                    _ = ctrl.monitor_notify.notified() => {}
                 }
             }
         });
@@ -424,7 +447,18 @@ impl AppController {
             active
         };
 
+        // Signal consumer immediately so audio draining & resampler flush start in parallel
+        // with Tokio task scheduling (zero CoreAudio HAL teardown on the stop critical path).
+        active.capture.signal_stop();
+
         let s = self.settings_snapshot();
+        if s.preserve_clipboard {
+            // Materialize any heavy clipboard item (e.g. PNG/TIFF/lazy promise) while Gemini
+            // finalizes (~300 ms), avoiding 100+ ms paste tail spikes.
+            paste::presnapshot_clipboard_async();
+        }
+        // Enqueue UI/chime updates before spawning the async finish task so main-queue
+        // ordering (Polishing -> Idle/hide) is always deterministic even on empty audio.
         sound::play_chime(
             s.sound_feedback,
             s.sound_theme,
@@ -451,7 +485,8 @@ impl AppController {
                 active.mode,
             );
 
-            // Stop capture on a blocking thread so CoreAudio teardown never stalls Tokio.
+            // Consumer was already unparked by `signal_stop()`; joining it drains the ring
+            // buffer and flushes the resampler in <1 ms while CoreAudio teardown runs detached.
             let capture = active.capture;
             let cap_summary = tokio::task::spawn_blocking(move || capture.stop())
                 .await
@@ -500,7 +535,7 @@ impl AppController {
                 return;
             };
 
-            let asr_outcome = sess.finish().await;
+            let asr_outcome = sess.finish(stop_requested_at).await;
             // Check if the user cancelled while polishing.
             let still_polishing = ctrl
                 .state
@@ -805,6 +840,7 @@ impl AppController {
                 let ctrl = Arc::clone(self);
                 tray::prompt_permissions_on_main(move || {
                     ctrl.try_init_hotkeys();
+                    ctrl.monitor_notify.notify_one();
                     ctrl.refresh_tray();
                 });
             }
@@ -853,6 +889,7 @@ impl AppController {
             return;
         }
         self.update_settings(|s| s.shortcut = binding);
+        self.monitor_notify.notify_one();
         self.refresh_tray();
     }
 }
