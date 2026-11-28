@@ -2,7 +2,7 @@
 
 **Vibo** is a **low-latency, low-RAM**, pure-Rust native macOS menu bar dictation app powered by **Gemini 3.5 Transcribe Live** (`gemini-3.5-transcribe-live`).
 
-Built directly on AppKit, CoreGraphics, and CoreAudio with zero Electron or WebView overhead, Vibo uses **~31 MB of RAM**, streams microphone audio over a pre-warmed WebSocket connection, and pastes finalized transcripts straight at your cursor in **~315 ms** while preserving your clipboard.
+Built directly on AppKit, CoreGraphics, and CoreAudio with zero Electron or WebView overhead, Vibo uses **~31 MB of RAM**, streams microphone audio over a pre-warmed WebSocket connection, and pastes finalized transcripts straight at your cursor in **~320 ms** (**~5 ms** local overhead) while preserving your clipboard.
 
 ---
 
@@ -12,7 +12,7 @@ Designed from the ground up to stay fast and out of your way:
 
 - **Low RAM Footprint**: **~31 MB** physical memory footprint (~44 MB RSS) in Activity Monitor — no Electron, WebView, or browser runtime.
 - **Tiny App Bundle**: **~3.8 MB** `/Applications/Vibo.app` (**3.3 MB** native release binary).
-- **Sub-Second Dictation**: Pre-warmed standby WebSockets, a lock-free audio capture ring buffer, and receipt-sequenced native pasting keep local overhead to a few milliseconds.
+- **Sub-Second Dictation (~5 ms Local Overhead)**: Pre-warmed standby WebSockets, a lock-free audio capture ring buffer with detached CoreAudio teardown, clipboard pre-snapshotting, and blocking event-driven hotkeys (zero idle wakeups) keep Vibo's local stop-to-paste overhead to **~5 ms**.
 
 ---
 
@@ -48,20 +48,21 @@ Designed from the ground up to stay fast and out of your way:
 
 ## Observed Latencies
 
-Measured across 53 real-world **Smart Mode** dictation sessions on macOS with `gemini-3.5-transcribe-live` (44 warm standby pool hits, 9 cold connects):
+Measured across 18 real-world **Smart Mode** dictation sessions on macOS with `gemini-3.5-transcribe-live` after the stop-path and standby-pool optimizations (**18/18 warm standby pool hits**, 0 cold connects):
 
 | Stage | Metric | Median (p50) | p90 | Range (min–max) | What it measures |
 | --- | --- | ---: | ---: | ---: | --- |
-| **Stop → Paste (End-to-End)** | `stop_to_paste_ms` | **314 ms** | 402 ms | 247–463 ms | Releasing the hotkey to text pasted at your cursor |
-| **Stop → Final Transcript** | `stop_to_final_ms` | **297 ms** | 380 ms | 229–446 ms | Hotkey release to finalized transcript received |
-| **Server Finalization** | `eos_to_final_ms` | **294 ms** | 377 ms | 226–441 ms | `activityEnd` sent to final Gemini response |
-| **Audio Flush** | `stop_to_eos_ms` | **2.6 ms** | 2.8 ms | 0.8–9.8 ms | Stop signal to final PCM chunk + `activityEnd` sent |
-| **WebSocket Attach (Warm)** | `connect_ms` | **0.2 ms** | 0.3 ms | 0.1–0.3 ms | Claiming a pre-warmed socket from the Standby Pool |
-| **WebSocket Attach (Cold)** | `connect_ms` | **194 ms** | — | 179–225 ms | Fresh TLS + WebSocket handshake + setup |
-| **Microphone Startup** | `mic_ready_ms` | **70 ms** | 73 ms | 58–94 ms | Opening CoreAudio input stream |
-| **Cursor Paste** | `paste_ms` | **1.7 ms** | 2.8 ms | 0.7–10.9 ms | `NSPasteboard` handoff and `Cmd+V` injection |
+| **Stop → Paste (End-to-End)** | `stop_to_paste_ms` | **320 ms** | 392 ms | 260–598 ms | Releasing the hotkey to text pasted at your cursor |
+| **Stop → Final Transcript** | `stop_to_final_ms` | **316 ms** | 390 ms | 259–596 ms | Hotkey release to finalized transcript received |
+| **Server Finalization** | `eos_to_final_ms` | **313 ms** | 388 ms | 256–581 ms | `activityEnd` sent to final Gemini response |
+| **Local Overhead (Vibo)** | `stop_to_paste_ms − eos_to_final_ms` | **4.8 ms** | 16.9 ms | 3.3–19.3 ms | Total local time in Vibo (stop, drain, flush, and paste) |
+| **Audio Stop & Flush** | `stop_to_eos_ms` | **2.8 ms** | 15.3 ms | 2.6–17.9 ms | Hotkey release through ring-buffer drain, resampler flush, and `activityEnd` sent |
+| **Cursor Paste** | `paste_ms` | **1.3 ms** | 2.5 ms | 0.5–5.9 ms | Pre-snapshotted `NSPasteboard` handoff and cached `Cmd+V` injection |
+| **WebSocket Attach (Warm)** | `connect_ms` | **0.2 ms** | 0.3 ms | 0.1–0.4 ms | Claiming a pre-warmed socket from the Standby Pool |
+| **WebSocket Attach (Cold)\*** | `connect_ms` | **208 ms** | 354 ms | 158–582 ms | Fresh TLS + WebSocket handshake + setup (when standby pool is cold) |
+| **Microphone Startup** | `mic_ready_ms` | **88 ms** | 94 ms | 78–107 ms | Opening CoreAudio input stream (external USB mic; ~70 ms on built-in mic) |
 
-> Network latency varies by connection and distance to Gemini API endpoints. Live per-run latency is always visible in the Vibo menu bar and logged to `~/Library/Logs/Vibo/transcriptions.jsonl`.
+> \*Cold connect stats are from 105 earlier cold-start sessions before overlapped 45 s standby rotation (0 cold connects occurred in the post-update sample). Over 98% of end-to-end latency is Gemini server finalization (`eos_to_final_ms`), which varies with network RTT and utterance length (the 598 ms max above was a 30 s dictation). Live per-run latency is always visible in the Vibo menu bar and logged to `~/Library/Logs/Vibo/transcriptions.jsonl`.
 
 ---
 
